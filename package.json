@@ -1,0 +1,15 @@
+{
+  "name": "docsify-podcast-player",
+  "version": "1.1.0",
+  "description": "Audio / podcast player plugin for Docsify (HLS, cover art, chapters, VTT transcript).",
+  "keywords": ["docsify", "docsify-plugin", "podcast", "audio", "hls", "player"],
+  "license": "MIT",
+  "main": "docsify-podcast-player.js",
+  "scripts": {
+    "test": "node --test",
+    "demo": "npx --yes serve@latest demo"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}

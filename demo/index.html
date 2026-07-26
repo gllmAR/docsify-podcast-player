@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>docsify-podcast-player — démo</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@5/dist/themes/core.min.css">
+  <style>
+    body { max-width: 820px; margin: 2rem auto; padding: 0 1rem; }
+    :root { --theme-color: #cc3333; }
+  </style>
+</head>
+<body>
+  <div class="markdown-section">
+    <h1>Démo du lecteur podcast</h1>
+    <p>La pochette, les chapitres et le transcript ci-dessous sont générés
+       automatiquement par le plugin à partir des fichiers présents à côté
+       de la page.</p>
+
+    <!-- Replace the src with a real .m3u8 / .m4a to test playback.
+         HLS is played natively on Safari and via hls.js elsewhere. -->
+    <audio controls preload="none"
+           src="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+           data-cover="cover.svg">
+      <track kind="subtitles" src="subs.vtt" srclang="fr" label="Français" default>
+    </audio>
+
+    <p><a href="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">⬇ Télécharger / ouvrir le flux</a></p>
+  </div>
+
+  <script>
+    window.$docsify = {
+      podcastPlayer: {
+        showCover: true,
+        showChapters: true,
+        showTranscript: true,
+        chapterLabel: 'Chapitres',
+        transcriptLabel: 'Transcript',
+      },
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@5/dist/docsify.min.js"></script>
+  <script src="../docsify-podcast-player.js"></script>
+</body>
+</html>
