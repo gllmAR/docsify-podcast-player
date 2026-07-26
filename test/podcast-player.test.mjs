@@ -18,7 +18,9 @@ const PAGE_HTML = `<!doctype html><html><head></head><body>
   </div>
 </body></html>`;
 
-function boot(html, overrides) {
+function boot(html, opts) {
+  opts = opts || {};
+  const { overrides, mediaSession, mediaMetadata } = opts;
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
@@ -29,6 +31,11 @@ function boot(html, overrides) {
   global.document = window.document;
 
   window.$docsify = Object.assign({ plugins: [] }, overrides || {});
+  if (mediaSession) {
+    Object.defineProperty(window.navigator, 'mediaSession',
+      { value: mediaSession, configurable: true });
+  }
+  if (mediaMetadata) window.MediaMetadata = mediaMetadata;
   // No real HLS engine in jsdom: leave window.Hls undefined.
   window.fetch = async (u) => {
     if (String(u).endsWith('.json')) {
@@ -117,3 +124,51 @@ test('playlist toolbar appears only with 2+ players', () => {
   assert.ok(bar, 'toolbar present with two players');
   assert.equal(bar.querySelectorAll('.podcast-player-btn').length, 2);
 });
+
+// ── MediaSession (next/prev episode navigation) ──────────────────────────
+
+test('MediaSession next/prev jump to the adjacent episode via pagination links', () => {
+  const handlers = {};
+  // docsify-pagination puts the class on a wrapper <div> with the <a> inside.
+  const html = `<!doctype html><html><head></head><body>
+    <div class="markdown-section">
+      <audio controls src="ep.m3u8" data-title="Épisode 1"></audio>
+    </div>
+    <div class="pagination">
+      <div class="pagination-item pagination-item--previous"><a href="#/episodes/00-last/"></a></div>
+      <div class="pagination-item pagination-item--next"><a href="#/episodes/02-next/"></a></div>
+    </div>
+  </body></html>`;
+  const w = boot(html, {
+    mediaSession: {
+      setActionHandler: (a, h) => { handlers[a] = h; },
+      metadata: null, playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  assert.ok(handlers.nexttrack, 'nexttrack handler registered');
+  assert.ok(handlers.previoustrack, 'previoustrack handler registered');
+
+  handlers.nexttrack();
+  assert.equal(w.location.hash, '#/episodes/02-next/');
+  handlers.previoustrack();
+  assert.equal(w.location.hash, '#/episodes/00-last/');
+});
+
+test('MediaSession metadata is set on play', () => {
+  let metadata = null;
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler() {},
+      set metadata(m) { metadata = m; },
+      get metadata() { return metadata; },
+      playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const audio = w.document.querySelector('audio');
+  fire(audio, 'play');
+  assert.ok(metadata, 'MediaSession metadata was set');
+  assert.match(metadata.title, /Épisode 1/);
+});
+

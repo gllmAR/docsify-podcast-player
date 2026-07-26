@@ -48,6 +48,7 @@
   var mediaExtRe = null;
   var hlsPromise = null;
   var playlist = [];
+  var mediaSessionReady = false;
 
   // ── Path fixing ─────────────────────────────────────────────────────
 
@@ -173,6 +174,7 @@
     img.alt = '';
     img.loading = 'lazy';
     img.src = url;
+    el._coverUrl = url;
     img.addEventListener('error', function () { img.remove(); });
     wrap.insertBefore(img, wrap.firstChild);
   }
@@ -294,6 +296,51 @@
 
   // ── Playlist (prev / next) ──────────────────────────────────────────
 
+  // MediaSession next/previous-track actions jump to the adjacent episode
+  // using the prev/next links docsify-pagination renders on every page.
+  // docsify-pagination puts the class on a wrapper <div> with the <a>
+  // inside, so we look for the inner anchor (falling back to the element
+  // itself in case the class is on the <a> directly).
+  function navToEpisode(sel) {
+    var link = document.querySelector(sel + ' a') || document.querySelector(sel);
+    if (!link) return;
+    var href = link.getAttribute('href') || '';
+    if (href.charAt(0) === '#') href = href.slice(1);
+    if (href) window.location.hash = href;
+  }
+
+  function setupMediaSession() {
+    if (mediaSessionReady) return;
+    if (!navigator.mediaSession) return;
+    mediaSessionReady = true;
+    try {
+      navigator.mediaSession.setActionHandler('nexttrack', function () {
+        navToEpisode('.pagination-item--next');
+      });
+      navigator.mediaSession.setActionHandler('previoustrack', function () {
+        navToEpisode('.pagination-item--previous');
+      });
+    } catch (e) { /* some actions unsupported — ignore */ }
+  }
+
+  function updateMediaSession(el, index) {
+    if (!navigator.mediaSession || !window.MediaMetadata) return;
+    var title = trackTitle(el, index) || (document.title || 'Podcast');
+    var artwork = [];
+    if (el._coverUrl) {
+      artwork.push({ src: el._coverUrl, sizes: '512x512', type: 'image/png' });
+    }
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: title,
+        artist: 'Souveraineté numérique',
+        album: 'Souveraineté numérique',
+        artwork: artwork,
+      });
+      navigator.mediaSession.playbackState = 'playing';
+    } catch (e) { /* ignore */ }
+  }
+
   function trackTitle(el, i) {
     if (el.dataset.title) return el.dataset.title;
     var src = el.dataset.originalSrc || el.getAttribute('src') || '';
@@ -369,6 +416,7 @@
 
     el.addEventListener('play', function () {
       attachHls(el);
+      updateMediaSession(el, index);
       playlist.forEach(function (p) {
         if (p.el !== el) p.el.pause();
       });
@@ -452,6 +500,7 @@
       '\\.(?:' + settings.mediaExtensions.join('|') + ')(?:[?#]|$)', 'i'
     );
     injectStyles();
+    setupMediaSession();
     window.$docsify = window.$docsify || {};
     window.$docsify.plugins = (window.$docsify.plugins || []).concat(plugin);
   }
