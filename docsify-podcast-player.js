@@ -6,23 +6,35 @@
  *   - Fixes relative src/href paths for <audio>, <video>, <source>, <track>
  *     and media links (Docsify resolves them against index.html, not the page)
  *   - HLS (.m3u8) playback: native on Safari, hls.js everywhere else
+ *     (with loading spinner, error recovery)
  *   - Cover art (auto-detected <stem>-cover.png or via data-cover)
- *   - Clickable chapter list from a JSON file (data-chapters or auto-detected
- *     <name>.json next to the audio file)
- *   - Transcript panel generated from the WebVTT subtitles track (clickable
- *     cues that seek the player)
- *   - Playlist toolbar with previous / next track when a page has 2+ players
+ *   - Clickable chapter list with active-chapter highlighting (timeupdate)
+ *   - Transcript panel from WebVTT subtitles (clickable cues, error+retry)
+ *   - Playlist toolbar with previous / next track
+ *   - Playback position persistence (sessionStorage per audio URL)
+ *   - Keyboard shortcuts: Space play/pause, arrows seek, M mute, up/down volume
  *
  * Usage:
  *   window.$docsify.podcastPlayer = {
- *     hlsCdn:   'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js',
- *     showCover:     true,
- *     showChapters:  true,
- *     showTranscript:true,
- *     coverPattern:  '{stem}-cover.png',   // {stem} = audio file without ext
- *     chapterLabel:  'Chapitres',
- *     transcriptLabel:'Transcript',
- *     mediaExtensions: null,               // override the default list
+ *     hlsCdn:           'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js',
+ *     showCover:        true,
+ *     showChapters:     true,
+ *     showTranscript:   true,
+ *     coverPattern:     '{stem}-cover.png',
+ *     chapterLabel:     'Chapitres',
+ *     transcriptLabel:  'Transcript',
+ *     mediaExtensions:  null,
+ *     artist:           'Podcast',
+ *     album:            'Podcast',
+ *     prevLabel:        '⏮',
+ *     nextLabel:        '⏭',
+ *     prevTitle:        'Previous track',
+ *     nextTitle:        'Next track',
+ *     errorLabel:       'Error',
+ *     retryLabel:       'Retry',
+ *     transcriptError:  'Transcript unavailable.',
+ *     seekSeconds:      10,
+ *     volumeStep:       0.1,
  *   };
  *   <script src="vendor/docsify-podcast-player/docsify-podcast-player.js"></script>
  */
@@ -42,6 +54,17 @@
       'mp4', 'mov', 'vtt', 'json', 'xml', 'csv', 'pdf', 'png', 'jpg',
       'jpeg', 'gif', 'webp', 'svg', 'blend', 'stl', 'glb', 'gltf',
     ],
+    artist: 'Podcast',
+    album: 'Podcast',
+    prevLabel: '\u23EE',
+    nextLabel: '\u23ED',
+    prevTitle: 'Previous track',
+    nextTitle: 'Next track',
+    errorLabel: 'Error',
+    retryLabel: 'Retry',
+    transcriptError: 'Transcript unavailable.',
+    seekSeconds: 10,
+    volumeStep: 0.1,
   };
 
   var settings = {};
@@ -53,17 +76,19 @@
   // ── Path fixing ─────────────────────────────────────────────────────
 
   function isAbsolute(src) {
-    return !src || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(src);
+    if (!src) return true;
+    return /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(src);
   }
 
   function routeDir() {
     var route = window.location.hash.replace(/^#\/?/, '').split('?')[0];
-    return route.substring(0, route.lastIndexOf('/') + 1);
+    var idx = route.lastIndexOf('/');
+    return idx >= 0 ? route.substring(0, idx + 1) : '';
   }
 
   function basePath() {
-    var bp = (window.$docsify && window.$docsify.basePath) || '';
-    if (bp) return bp.replace(/\/+$/, '');
+    var bp = window.$docsify && window.$docsify.basePath;
+    if (bp !== undefined && bp !== null) return bp.replace(/\/+$/, '');
     return window.location.pathname.replace(/[^/]*$/, '').replace(/\/+$/, '');
   }
 
@@ -115,20 +140,72 @@
     return hlsPromise;
   }
 
+  function showHlsLoading(wrap) {
+    if (wrap.querySelector('.podcast-player-loading')) return;
+    var spinner = document.createElement('span');
+    spinner.className = 'podcast-player-loading';
+    spinner.textContent = '\u25B6'; // Play symbol as loading indicator
+    spinner.title = 'Loading audio\u2026';
+    wrap.insertBefore(spinner, wrap.firstChild);
+  }
+
+  function hideHlsLoading(wrap) {
+    var el = wrap.querySelector('.podcast-player-loading');
+    if (el) el.remove();
+  }
+
+  function showHlsError(wrap, audioEl, originalSrc) {
+    hideHlsLoading(wrap);
+    if (wrap.querySelector('.podcast-player-error')) return;
+    var err = document.createElement('div');
+    err.className = 'podcast-player-error';
+    err.textContent = settings.errorLabel;
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'podcast-player-btn podcast-player-retry';
+    retry.textContent = settings.retryLabel;
+    retry.addEventListener('click', function () {
+      err.remove();
+      attachHls(audioEl);
+    });
+    err.appendChild(document.createTextNode(' '));
+    err.appendChild(retry);
+    wrap.insertBefore(err, audioEl);
+  }
+
   function attachHls(el) {
-    var src = el.getAttribute('src') || '';
+    var src = el.getAttribute('src') || el.dataset.originalSrc || '';
     if (!/\.m3u8(?:[?#]|$)/i.test(src)) return;
-    if (el.dataset.hlsAttached || nativeHls(el)) return;
-    el.dataset.hlsAttached = '1';
+    if (el.dataset.hlsAttached) return;
+    if (nativeHls(el)) { el.dataset.hlsAttached = '1'; return; }
+    if (el._hlsLoading) return;
+    el._hlsLoading = true;
     var original = src;
-    el.removeAttribute('src');
+    var wrap = el.closest('.podcast-player') || el.parentNode;
+    showHlsLoading(wrap);
     loadHlsJs().then(function (Hls) {
-      if (!Hls.isSupported()) { el.setAttribute('src', original); return; }
+      el._hlsLoading = false;
+      if (!Hls.isSupported()) { hideHlsLoading(wrap); el.dataset.hlsAttached = '1'; return; }
       var hls = new Hls();
       hls.loadSource(original);
       hls.attachMedia(el);
       el._hls = hls;
-    }).catch(function () { el.setAttribute('src', original); });
+      el.dataset.hlsAttached = '1';
+      hls.on(Hls.Events.MANIFEST_PARSED, function () { hideHlsLoading(wrap); });
+      hls.on(Hls.Events.ERROR, function (_evt, data) {
+        if (data.fatal) {
+          hideHlsLoading(wrap);
+          el._hls.destroy();
+          el._hls = null;
+          el.dataset.hlsAttached = '';
+          showHlsError(wrap, el, original);
+        }
+      });
+    }).catch(function () {
+      el._hlsLoading = false;
+      hideHlsLoading(wrap);
+      showHlsError(wrap, el, original);
+    });
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────
@@ -166,7 +243,9 @@
     if (el.dataset.cover) {
       url = isAbsolute(el.dataset.cover) ? el.dataset.cover : resolve(el.dataset.cover);
     } else {
-      var pattern = settings.coverPattern.replace('{stem}', audioStem(el));
+      var stem = audioStem(el);
+      if (!stem) return;
+      var pattern = settings.coverPattern.replace('{stem}', stem);
       url = resolve(pattern);
     }
     var img = document.createElement('img');
@@ -185,32 +264,26 @@
     if (el.dataset.chapters) {
       return isAbsolute(el.dataset.chapters)
         ? el.dataset.chapters
- : resolve(el.dataset.chapters);
+        : resolve(el.dataset.chapters);
     }
     var stem = audioStem(el);
+    if (!stem) return '';
     return isAbsolute(stem) ? stem + '.json' : resolve(stem + '.json');
   }
 
+  var chapterDataCache = {};
+
   function buildChapters(el, wrap) {
     if (!settings.showChapters) return;
-    var url = chaptersUrl(el);
-    if (!url) return;
-    fetch(url).then(function (r) {
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    }).then(function (chapters) {
-      if (!Array.isArray(chapters) || !chapters.length) return;
-      var box = document.createElement('details');
-      box.className = 'podcast-player-chapters';
-      var sum = document.createElement('summary');
-      sum.textContent = settings.chapterLabel;
-      box.appendChild(sum);
-      var list = document.createElement('ol');
-      chapters.forEach(function (ch) {
+
+    function render(list, chapters) {
+      list.innerHTML = '';
+      chapters.forEach(function (ch, i) {
         var li = document.createElement('li');
+        li.dataset.chapterIndex = i;
         var a = document.createElement('a');
         a.href = '#';
-        a.textContent = formatTime(ch.startTime || 0) + ' — ' + (ch.title || '');
+        a.textContent = formatTime(ch.startTime || 0) + ' \u2014 ' + (ch.title || '');
         a.addEventListener('click', function (e) {
           e.preventDefault();
           el.currentTime = parseFloat(ch.startTime || 0);
@@ -219,9 +292,54 @@
         li.appendChild(a);
         list.appendChild(li);
       });
-      box.appendChild(list);
-      wrap.appendChild(box);
-    }).catch(function () { /* no chapters — fine */ });
+    }
+
+    function highlight(list, chapters, t) {
+      var items = list.querySelectorAll('li');
+      var idx = 0;
+      for (var i = chapters.length - 1; i >= 0; i--) {
+        if (t >= (parseFloat(chapters[i].startTime) || 0)) { idx = i; break; }
+      }
+      items.forEach(function (li) { li.classList.remove('active'); });
+      if (items[idx]) items[idx].classList.add('active');
+    }
+
+    var url = chaptersUrl(el);
+    if (!url) return;
+    var box = document.createElement('details');
+    box.className = 'podcast-player-chapters';
+    var sum = document.createElement('summary');
+    sum.textContent = settings.chapterLabel;
+    box.appendChild(sum);
+    var list = document.createElement('ol');
+    box.appendChild(list);
+
+    var loadFn = function () {
+      if (chapterDataCache[url]) {
+        render(list, chapterDataCache[url]);
+        return;
+      }
+      list.textContent = '\u2026';
+      fetch(url).then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }).then(function (chapters) {
+        if (!Array.isArray(chapters) || !chapters.length) { box.remove(); return; }
+        chapterDataCache[url] = chapters;
+        render(list, chapters);
+      }).catch(function () {
+        list.innerHTML = '<span class="podcast-player-error-msg">' + settings.errorLabel +
+          ' <button class="podcast-player-btn podcast-player-retry" type="button">' +
+          settings.retryLabel + '</button></span>';
+        list.querySelector('button').addEventListener('click', function () { loadFn(); });
+      });
+    };
+    loadFn();
+    wrap.appendChild(box);
+
+    el.addEventListener('timeupdate', function () {
+      if (chapterDataCache[url]) highlight(list, chapterDataCache[url], el.currentTime);
+    });
   }
 
   // ── Transcript (from VTT) ───────────────────────────────────────────
@@ -232,7 +350,9 @@
       var t = track.getAttribute('src');
       return isAbsolute(t) ? t : resolve(t);
     }
-    return resolve(audioStem(el) + '.vtt');
+    var stem = audioStem(el);
+    if (!stem) return '';
+    return resolve(stem + '.vtt');
   }
 
   function parseVtt(text) {
@@ -251,6 +371,8 @@
     return cues;
   }
 
+  var transcriptCache = {};
+
   function buildTranscript(el, wrap) {
     if (!settings.showTranscript) return;
     var btn = document.createElement('button');
@@ -261,31 +383,37 @@
     var panel = document.createElement('div');
     panel.className = 'podcast-player-transcript';
     panel.hidden = true;
+
+    var tUrl = transcriptUrl(el);
+
+    var loadFn = function () {
+      if (transcriptCache[tUrl]) {
+        buildTranscriptDOM(panel, transcriptCache[tUrl], el);
+        return;
+      }
+      panel.textContent = '\u2026';
+      if (!tUrl) { panel.textContent = settings.transcriptError; return; }
+      fetch(tUrl).then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.text();
+      }).then(function (text) {
+        var cues = parseVtt(text);
+        transcriptCache[tUrl] = cues;
+        panel.textContent = '';
+        buildTranscriptDOM(panel, cues, el);
+      }).catch(function () {
+        if (panel.dataset.loaded) return; // preserve existing content
+        panel.innerHTML = '<span class="podcast-player-error-msg">' + settings.transcriptError +
+          ' <button class="podcast-player-btn podcast-player-retry" type="button">' +
+          settings.retryLabel + '</button></span>';
+        panel.querySelector('button').addEventListener('click', function () { loadFn(); });
+      });
+    };
+
     btn.addEventListener('click', function () {
       if (!panel.dataset.loaded) {
-        fetch(transcriptUrl(el)).then(function (r) {
-          if (!r.ok) throw new Error(r.status);
-          return r.text();
-        }).then(function (text) {
-          var cues = parseVtt(text);
-          var frag = document.createDocumentFragment();
-          cues.forEach(function (cue) {
-            var p = document.createElement('p');
-            var t = document.createElement('button');
-            t.type = 'button';
-            t.className = 'podcast-player-cue';
-            t.textContent = formatTime(cue.start);
-            t.addEventListener('click', function () {
-              el.currentTime = cue.start;
-              el.play();
-            });
-            p.appendChild(t);
-            p.appendChild(document.createTextNode(' ' + cue.text));
-            frag.appendChild(p);
-          });
-          panel.appendChild(frag);
-          panel.dataset.loaded = '1';
-        }).catch(function () { panel.textContent = 'Transcript indisponible.'; });
+        loadFn();
+        panel.dataset.loaded = '1';
       }
       panel.hidden = !panel.hidden;
       btn.setAttribute('aria-expanded', String(!panel.hidden));
@@ -294,13 +422,28 @@
     wrap.appendChild(panel);
   }
 
+  function buildTranscriptDOM(panel, cues, el) {
+    panel.textContent = '';
+    var frag = document.createDocumentFragment();
+    cues.forEach(function (cue) {
+      var p = document.createElement('p');
+      var t = document.createElement('button');
+      t.type = 'button';
+      t.className = 'podcast-player-cue';
+      t.textContent = formatTime(cue.start);
+      t.addEventListener('click', function () {
+        el.currentTime = cue.start;
+        el.play();
+      });
+      p.appendChild(t);
+      p.appendChild(document.createTextNode(' ' + cue.text));
+      frag.appendChild(p);
+    });
+    panel.appendChild(frag);
+  }
+
   // ── Playlist (prev / next) ──────────────────────────────────────────
 
-  // MediaSession next/previous-track actions jump to the adjacent episode
-  // using the prev/next links docsify-pagination renders on every page.
-  // docsify-pagination puts the class on a wrapper <div> with the <a>
-  // inside, so we look for the inner anchor (falling back to the element
-  // itself in case the class is on the <a> directly).
   function navToEpisode(sel) {
     var link = document.querySelector(sel + ' a') || document.querySelector(sel);
     if (!link) return;
@@ -320,7 +463,7 @@
       navigator.mediaSession.setActionHandler('previoustrack', function () {
         navToEpisode('.pagination-item--previous');
       });
-    } catch (e) { /* some actions unsupported — ignore */ }
+    } catch (e) { /* ignore */ }
   }
 
   function updateMediaSession(el, index) {
@@ -333,8 +476,8 @@
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: title,
-        artist: 'Souveraineté numérique',
-        album: 'Souveraineté numérique',
+        artist: settings.artist,
+        album: settings.album,
         artwork: artwork,
       });
       navigator.mediaSession.playbackState = 'playing';
@@ -354,8 +497,14 @@
       if (i !== index) p.el.pause();
     });
     var target = playlist[index];
-    if (target.el.scrollIntoView) target.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    if (autoplay) target.el.play();
+    if (target.el && target.el.closest('body')) {
+      try { target.el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+      catch (_) { target.el.scrollIntoView(); }
+    }
+    if (autoplay) {
+      var p = target.el.play();
+      if (p && p.catch) p.catch(function () { /* autoplay blocked — fine */ });
+    }
   }
 
   function buildToolbar(entry, index) {
@@ -366,22 +515,22 @@
       var prev = document.createElement('button');
       prev.type = 'button';
       prev.className = 'podcast-player-btn podcast-player-prev';
-      prev.textContent = '⏮';
-      prev.title = 'Piste précédente';
+      prev.textContent = settings.prevLabel;
+      prev.title = settings.prevTitle;
       prev.disabled = index === 0;
       prev.addEventListener('click', function () { goTo(index - 1, true); });
 
       var next = document.createElement('button');
       next.type = 'button';
       next.className = 'podcast-player-btn podcast-player-next';
-      next.textContent = '⏭';
-      next.title = 'Piste suivante';
+      next.textContent = settings.nextLabel;
+      next.title = settings.nextTitle;
       next.disabled = index === playlist.length - 1;
       next.addEventListener('click', function () { goTo(index + 1, true); });
 
       var label = document.createElement('span');
       label.className = 'podcast-player-title';
-      label.textContent = (index + 1) + '/' + playlist.length + ' · ' +
+      label.textContent = (index + 1) + '/' + playlist.length + ' \u00B7 ' +
         trackTitle(entry.el, index);
 
       bar.appendChild(prev);
@@ -396,14 +545,75 @@
     return bar;
   }
 
+  // ── Keyboard shortcuts ──────────────────────────────────────────────
+
+  function setupKeyboard(wrap, el) {
+    wrap.addEventListener('keydown', function (e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
+          e.target.isContentEditable) return;
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault();
+          if (el.paused) el.play(); else el.pause();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          el.currentTime = Math.max(0, el.currentTime - settings.seekSeconds);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          el.currentTime = Math.min(el.duration || Infinity, el.currentTime + settings.seekSeconds);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          el.volume = Math.min(1, el.volume + settings.volumeStep);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          el.volume = Math.max(0, el.volume - settings.volumeStep);
+          break;
+        case 'KeyM':
+          e.preventDefault();
+          el.muted = !el.muted;
+          break;
+      }
+    });
+  }
+
+  // ── Position persistence ────────────────────────────────────────────
+
+  function positionKey(el) {
+    var src = el.dataset.originalSrc || el.getAttribute('src') || '';
+    return 'podcast-pos:' + src;
+  }
+
+  function savePosition(el) {
+    if (!el.duration || el.seeking) return;
+    try { sessionStorage.setItem(positionKey(el), String(el.currentTime)); } catch (_) { /* ignore */ }
+  }
+
+  function restorePosition(el) {
+    try {
+      var saved = sessionStorage.getItem(positionKey(el));
+      if (saved) {
+        var t = parseFloat(saved);
+        if (t > 0 && isFinite(t)) el.currentTime = t;
+      }
+    } catch (_) { /* ignore */ }
+  }
+
   // ── Enhance one <audio> ──────────────────────────────────────────────
 
   function enhance(el, index) {
     if (el.dataset.podcastEnhanced) return;
     el.dataset.podcastEnhanced = '1';
 
+    if (!el.parentNode) return;
     var wrap = document.createElement('div');
     wrap.className = 'podcast-player';
+    wrap.setAttribute('tabindex', '0');
+    wrap.setAttribute('role', 'region');
+    wrap.setAttribute('aria-label', trackTitle(el, index) || 'Podcast player');
     el.parentNode.insertBefore(wrap, el);
 
     var bar = buildToolbar(playlist[index], index);
@@ -414,6 +624,10 @@
     buildChapters(el, wrap);
     buildTranscript(el, wrap);
 
+    el.addEventListener('loadedmetadata', function () { restorePosition(el); }, { once: true });
+    el.addEventListener('timeupdate', function () { savePosition(el); });
+    el.addEventListener('pause', function () { savePosition(el); });
+
     el.addEventListener('play', function () {
       attachHls(el);
       updateMediaSession(el, index);
@@ -422,6 +636,7 @@
       });
     }, { once: false });
 
+    setupKeyboard(wrap, el);
     attachHls(el);
   }
 
@@ -431,7 +646,9 @@
     if (document.getElementById('podcast-player-styles')) return;
     var css = [
       '.podcast-player { margin: 1em 0; display: flex; flex-wrap: wrap;',
-      '  gap: 1em; align-items: flex-start; }',
+      '  gap: 1em; align-items: flex-start; outline: none; }',
+      '.podcast-player:focus-visible { box-shadow: 0 0 0 2px var(--theme-color, #36c);',
+      '  border-radius: 4px; }',
       '.podcast-player audio { flex: 1 1 280px; width: 100%; min-width: 240px;',
       '  display: block; }',
       '.podcast-player-cover { width: 120px; height: 120px; object-fit: cover;',
@@ -441,18 +658,26 @@
       '.podcast-player-btn { border: 1px solid var(--theme-color, #ccc);',
       '  background: transparent; border-radius: 4px; cursor: pointer;',
       '  padding: .15em .6em; font-size: 1em; line-height: 1.4; }',
-      '.podcast-player-btn:disabled { opacity: .4; cursor: default; }',
+      '.podcast-player-btn:hover { background: var(--theme-color, #36c); color: #fff; }',
+      '.podcast-player-btn:disabled { opacity: .4; cursor: default; pointer-events: none; }',
       '.podcast-player-title { font-size: .85em; opacity: .8;',
       '  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
       '.podcast-player-chapters { flex: 1 1 100%; font-size: .9em; }',
       '.podcast-player-chapters summary { cursor: pointer; font-weight: 600;',
       '  margin: .25em 0; }',
       '.podcast-player-chapters ol { margin: .25em 0; padding-left: 1.4em; }',
+      '.podcast-player-chapters li { border-radius: 3px; padding: 0 .25em;',
+      '  transition: background .15s; }',
+      '.podcast-player-chapters li.active { background: var(--theme-color, #36c)15;',
+      '  font-weight: 600; }',
+      '.podcast-player-chapters li.active a { color: var(--theme-color, #36c); }',
       '.podcast-player-chapters a { text-decoration: none; }',
       '.podcast-player-chapters a:hover { text-decoration: underline; }',
       '.podcast-player-transcript-btn { border: 1px solid var(--theme-color, #ccc);',
       '  background: transparent; border-radius: 4px; cursor: pointer;',
       '  padding: .15em .6em; margin-top: .25em; font-size: .85em; }',
+      '.podcast-player-transcript-btn:hover { background: var(--theme-color, #36c);',
+      '  color: #fff; }',
       '.podcast-player-transcript { flex: 1 1 100%; max-height: 18em; overflow: auto;',
       '  border: 1px solid var(--theme-color, #ccc); border-radius: 6px;',
       '  padding: .5em .75em; margin-top: .25em; font-size: .9em; line-height: 1.5; }',
@@ -460,6 +685,15 @@
       '.podcast-player-cue { border: 0; background: none; color: var(--theme-color, #36c);',
       '  cursor: pointer; font-variant-numeric: tabular-nums; padding: 0;',
       '  font-weight: 600; }',
+      '.podcast-player-loading { font-size: 1.5em; color: var(--theme-color, #36c);',
+      '  animation: podcast-player-pulse 1s ease-in-out infinite;',
+      '  line-height: 1; align-self: center; }',
+      '.podcast-player-error { flex: 1 1 100%; color: #c33; font-size: .85em; }',
+      '.podcast-player-error-msg { color: #c33; }',
+      '.podcast-player-retry { font-size: .85em; }',
+      '@keyframes podcast-player-pulse {',
+      '  0%, 100% { opacity: .5; } 50% { opacity: 1; }',
+      '}',
     ].join('\n');
     var style = document.createElement('style');
     style.id = 'podcast-player-styles';
@@ -487,7 +721,7 @@
   function install() {
     var user = (window.$docsify && window.$docsify.podcastPlayer) || {};
     settings = {
-      hlsCdn: user.hlsCdn || DEFAULTS.hlsCdn,
+      hlsCdn: user.hlsCdn !== undefined ? user.hlsCdn : DEFAULTS.hlsCdn,
       showCover: user.showCover !== undefined ? user.showCover : DEFAULTS.showCover,
       showChapters: user.showChapters !== undefined ? user.showChapters : DEFAULTS.showChapters,
       showTranscript: user.showTranscript !== undefined ? user.showTranscript : DEFAULTS.showTranscript,
@@ -495,6 +729,17 @@
       chapterLabel: user.chapterLabel || DEFAULTS.chapterLabel,
       transcriptLabel: user.transcriptLabel || DEFAULTS.transcriptLabel,
       mediaExtensions: user.mediaExtensions || DEFAULTS.mediaExtensions,
+      artist: user.artist || DEFAULTS.artist,
+      album: user.album || DEFAULTS.album,
+      prevLabel: user.prevLabel || DEFAULTS.prevLabel,
+      nextLabel: user.nextLabel || DEFAULTS.nextLabel,
+      prevTitle: user.prevTitle || DEFAULTS.prevTitle,
+      nextTitle: user.nextTitle || DEFAULTS.nextTitle,
+      errorLabel: user.errorLabel || DEFAULTS.errorLabel,
+      retryLabel: user.retryLabel || DEFAULTS.retryLabel,
+      transcriptError: user.transcriptError || DEFAULTS.transcriptError,
+      seekSeconds: user.seekSeconds !== undefined ? user.seekSeconds : DEFAULTS.seekSeconds,
+      volumeStep: user.volumeStep !== undefined ? user.volumeStep : DEFAULTS.volumeStep,
     };
     mediaExtRe = new RegExp(
       '\\.(?:' + settings.mediaExtensions.join('|') + ')(?:[?#]|$)', 'i'
