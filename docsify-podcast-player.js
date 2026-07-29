@@ -72,6 +72,7 @@
   var hlsPromise = null;
   var playlist = [];
   var mediaSessionReady = false;
+  var activeAudio = null;
 
   // ── Path fixing ─────────────────────────────────────────────────────
 
@@ -326,7 +327,11 @@
       }).then(function (chapters) {
         if (!Array.isArray(chapters) || !chapters.length) { box.remove(); return; }
         chapterDataCache[url] = chapters;
+        el._chapters = chapters;
         render(list, chapters);
+        if (activeAudio === el || el.paused === false) {
+          updateMediaSession(el, playlist.findIndex(function(p) { return p.el === el; }));
+        }
       }).catch(function () {
         list.innerHTML = '<span class="podcast-player-error-msg">' + settings.errorLabel +
           ' <button class="podcast-player-btn podcast-player-retry" type="button">' +
@@ -449,7 +454,10 @@
     if (!link) return;
     var href = link.getAttribute('href') || '';
     if (href.charAt(0) === '#') href = href.slice(1);
-    if (href) window.location.hash = href;
+    if (href) {
+      try { sessionStorage.setItem('podcast-autoplay', '1'); } catch (_) { /* ignore */ }
+      window.location.hash = href;
+    }
   }
 
   function setupMediaSession() {
@@ -463,6 +471,39 @@
       navigator.mediaSession.setActionHandler('previoustrack', function () {
         navToEpisode('.pagination-item--previous');
       });
+      navigator.mediaSession.setActionHandler('seekforward', function () {
+        if (!activeAudio) return;
+        var chapters = activeAudio._chapters;
+        if (chapters && chapters.length) {
+          for (var i = 0; i < chapters.length; i++) {
+            if ((parseFloat(chapters[i].startTime) || 0) > activeAudio.currentTime + 0.5) {
+              activeAudio.currentTime = parseFloat(chapters[i].startTime) || 0;
+              return;
+            }
+          }
+        }
+        activeAudio.currentTime = Math.min(activeAudio.duration || Infinity, activeAudio.currentTime + settings.seekSeconds);
+      });
+      navigator.mediaSession.setActionHandler('seekbackward', function () {
+        if (!activeAudio) return;
+        var chapters = activeAudio._chapters;
+        if (chapters && chapters.length) {
+          for (var i = chapters.length - 1; i >= 0; i--) {
+            if ((parseFloat(chapters[i].startTime) || 0) < activeAudio.currentTime - 0.5) {
+              activeAudio.currentTime = parseFloat(chapters[i].startTime) || 0;
+              return;
+            }
+          }
+          activeAudio.currentTime = 0;
+          return;
+        }
+        activeAudio.currentTime = Math.max(0, activeAudio.currentTime - settings.seekSeconds);
+      });
+      navigator.mediaSession.setActionHandler('seekto', function (details) {
+        if (activeAudio && details.seekTime !== undefined) {
+          activeAudio.currentTime = details.seekTime;
+        }
+      });
     } catch (e) { /* ignore */ }
   }
 
@@ -474,12 +515,18 @@
       artwork.push({ src: el._coverUrl, sizes: '512x512', type: 'image/png' });
     }
     try {
-      navigator.mediaSession.metadata = new MediaMetadata({
+      var meta = {
         title: title,
         artist: settings.artist,
         album: settings.album,
         artwork: artwork,
-      });
+      };
+      if (el._chapters && el._chapters.length) {
+        meta.chapterInfo = el._chapters.map(function (ch) {
+          return { title: ch.title || '', startTime: parseFloat(ch.startTime) || 0 };
+        });
+      }
+      navigator.mediaSession.metadata = new MediaMetadata(meta);
       navigator.mediaSession.playbackState = 'playing';
     } catch (e) { /* ignore */ }
   }
@@ -624,11 +671,24 @@
     buildChapters(el, wrap);
     buildTranscript(el, wrap);
 
-    el.addEventListener('loadedmetadata', function () { restorePosition(el); }, { once: true });
+    el.addEventListener('loadedmetadata', function () {
+      restorePosition(el);
+      try {
+        if (sessionStorage.getItem('podcast-autoplay') === '1') {
+          sessionStorage.removeItem('podcast-autoplay');
+          var p = el.play();
+          if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        }
+      } catch (_) { /* ignore */ }
+    }, { once: true });
     el.addEventListener('timeupdate', function () { savePosition(el); });
-    el.addEventListener('pause', function () { savePosition(el); });
+    el.addEventListener('pause', function () {
+      savePosition(el);
+      if (activeAudio === el) activeAudio = null;
+    });
 
     el.addEventListener('play', function () {
+      activeAudio = el;
       attachHls(el);
       updateMediaSession(el, index);
       playlist.forEach(function (p) {
