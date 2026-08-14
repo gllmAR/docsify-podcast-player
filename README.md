@@ -91,7 +91,7 @@ actually downloads depends on what answers that URL:
    are cached in Cache Storage.
 2. **No service worker, or the download URL is outside its scope** (e.g. a
    remote-repo page whose media lives under `/sn/` while the site's SW is
-   scoped to `/582705MO-2026-01/`): the player catches the click and remuxes
+   scoped to `/582705MO-2026-1/`): the player catches the click and remuxes
    in the main thread (lazy-loads `ts2m4a.js` from `ts2m4aCdn`), downloading
    a blob. Copy-link still yields the real URL.
 
