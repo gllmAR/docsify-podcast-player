@@ -44,6 +44,12 @@ browser — so the repo never has to store the m4a.
       downloadBusyLabel:  '⏳ Préparation…',
       downloadErrorLabel: 'Téléchargement indisponible.',
       ts2m4aCdn:          'https://gllmar.github.io/docsify-podcast-player/ts2m4a.js',
+      // Optional: fn(resolvedSrc, audioEl) → download URL. Use it when the
+      // audio src is not a URL your site's service worker can answer — e.g.
+      // remote-repo pages whose media points at codeberg API URLs — and map
+      // it to a same-origin route your SW synthesizes. Default: same URL
+      // with .m3u8 → .m4a.
+      downloadUrl:        null,
       coverPattern:       '{stem}-cover.png', // {stem} = audio file without extension
       chapterLabel:       'Chapitres',
       transcriptLabel:    'Transcript',
@@ -79,9 +85,12 @@ Chapters format (`episode.json`):
 
 ## Download & service worker
 
-The download button always targets the real `…/{stem}.m4a` URL, so copy-link
-works everywhere. Whether a click actually downloads depends on what answers
-that URL:
+The download button targets the real `…/{stem}.m4a` URL, so copy-link works
+everywhere. When the audio src is rewritten by a third-party plugin (e.g.
+docsify-remote-repo rewrites media to `https://codeberg.org/api/v1/...`
+URLs, which no service worker can intercept), set `downloadUrl` to map the
+resolved src to a same-origin `.m4a` route served by your own SW.
+Whether a click actually downloads depends on what answers that URL:
 
 1. **Service worker active** (recommended): [`sw.js`](./sw.js) intercepts
    `.m4a` requests, remuxes the HLS segments with

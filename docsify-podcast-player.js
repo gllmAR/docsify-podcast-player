@@ -60,6 +60,11 @@
     downloadBusyLabel: '⏳ Préparation…',
     downloadErrorLabel: 'Téléchargement indisponible.',
     ts2m4aCdn: 'https://gllmar.github.io/docsify-podcast-player/ts2m4a.js',
+    // Optional: fn(resolvedSrc, audioEl) → download URL. Lets a site serve
+    // the .m4a through its own service-worker route (e.g. remote-repo
+    // pages whose media points at codeberg API URLs). Default: same URL
+    // with .m3u8 → .m4a.
+    downloadUrl: null,
     coverPattern: '{stem}-cover.png',
     chapterLabel: 'Chapitres',
     transcriptLabel: 'Transcript',
@@ -508,7 +513,9 @@
       return;
     }
 
-    a.href = resolve(src).replace(/\.m3u8(?:[?#].*)?$/i, '.m4a');
+    var href = settings.downloadUrl ? (settings.downloadUrl(resolve(src), el) || '') : '';
+    if (!href) href = resolve(src).replace(/\.m3u8(?:[?#].*)?$/i, '.m4a');
+    a.href = href;
 
     a.addEventListener('click', function (ev) {
       var swReady = ('serviceWorker' in navigator) && !!navigator.serviceWorker.controller;
@@ -899,6 +906,7 @@
       downloadBusyLabel: user.downloadBusyLabel || DEFAULTS.downloadBusyLabel,
       downloadErrorLabel: user.downloadErrorLabel || DEFAULTS.downloadErrorLabel,
       ts2m4aCdn: user.ts2m4aCdn || DEFAULTS.ts2m4aCdn,
+      downloadUrl: typeof user.downloadUrl === 'function' ? user.downloadUrl : null,
       coverPattern: user.coverPattern || DEFAULTS.coverPattern,
       chapterLabel: user.chapterLabel || DEFAULTS.chapterLabel,
       transcriptLabel: user.transcriptLabel || DEFAULTS.transcriptLabel,

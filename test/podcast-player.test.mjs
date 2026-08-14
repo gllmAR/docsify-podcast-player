@@ -242,3 +242,20 @@ test('click without SW falls back to main-thread remux + blob download', async (
   const blob = created;
   assert.ok(!blob || blob.size === 3, 'blob carries the remuxed bytes');
 });
+
+test('downloadUrl hook rewrites the anchor href (remote-repo pages)', () => {
+  // Simulates a remote-repo page whose audio src is a codeberg API URL.
+  const html = `<div class="markdown-section">
+    <audio controls src="https://codeberg.org/api/v1/repos/tim-montmorency/sn/media/episodes/01/x.m3u8"></audio>
+  </div>`;
+  const w = boot(html, { overrides: { podcastPlayer: {
+    downloadUrl: (src) => src
+      .replace(/\.m3u8$/, '.m4a')
+      .replace(/^https?:\/\/[^/]+/, 'https://dl.test'),
+  } } });
+  const a = w.document.querySelector('.podcast-player-download');
+  assert.ok(a.href.startsWith('https://dl.test/'),
+    `hook controls the host (got ${a.href})`);
+  assert.ok(a.href.endsWith('/media/episodes/01/x.m4a'),
+    `hook keeps the path + .m4a (got ${a.href})`);
+});
