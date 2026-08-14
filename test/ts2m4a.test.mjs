@@ -158,40 +158,13 @@ test('tsToM4a picks the lowest-bandwidth variant', async (t) => {
 
 // ── URL mapping ───────────────────────────────────────────────────────
 
-test('toM3u8Url: local and /remote/ codeberg mapping', () => {
-  const local = ts2m4a.toM3u8Url(new URL('https://site.test/pod/ep.m4a'), {});
+test('toM3u8Url: local same-origin mapping', () => {
+  const local = ts2m4a.toM3u8Url(new URL('https://site.test/pod/ep.m4a'));
   assert.equal(local, 'https://site.test/pod/ep.m3u8');
 
-  const remote = ts2m4a.toM3u8Url(
-    new URL('https://site.test/remote/codeberg.org/tim-montmorency/sn/episodes/01/x.m4a'), {});
-  assert.equal(remote,
+  const pages = ts2m4a.toM3u8Url(
+    new URL('https://tim-montmorency.codeberg.page/sn/episodes/01/x.m4a'));
+  assert.equal(pages,
     'https://tim-montmorency.codeberg.page/sn/episodes/01/x.m3u8');
-
-  const other = ts2m4a.toM3u8Url(
-    new URL('https://site.test/remote/github.com/foo/bar/x.m4a'), {});
-  assert.equal(other, null);
 });
 
-test('toM3u8Url: /remote/ under a basePath scope (course site case)', () => {
-  // Course site: SW scoped to /582705MO-2026-01/, virtual route includes it.
-  const url = 'https://tim-montmorency.codeberg.page/582705MO-2026-01/remote/codeberg.org/tim-montmorency/sn/episodes/01-bitkeeper-git/balado-s01e01-bitkeeper-git.m4a';
-  const mapped = ts2m4a.toM3u8Url(new URL(url), {
-    scope: 'https://tim-montmorency.codeberg.page/582705MO-2026-01/',
-  });
-  assert.equal(mapped,
-    'https://tim-montmorency.codeberg.page/sn/episodes/01-bitkeeper-git/balado-s01e01-bitkeeper-git.m3u8');
-
-  // Local mapping keeps the full path (scope included) — sn site case.
-  const local = ts2m4a.toM3u8Url(
-    new URL('https://tim-montmorency.codeberg.page/sn/episodes/01-bitkeeper-git/x.m4a'),
-    { scope: 'https://tim-montmorency.codeberg.page/sn/' });
-  assert.equal(local,
-    'https://tim-montmorency.codeberg.page/sn/episodes/01-bitkeeper-git/x.m3u8');
-});
-
-test('toM3u8Url: non-codeberg /remote/ host → null', () => {
-  const mapped = ts2m4a.toM3u8Url(
-    new URL('https://site.test/remote/gitlab.com/foo/bar/x.m4a'),
-    { scope: 'https://site.test/' });
-  assert.equal(mapped, null);
-});

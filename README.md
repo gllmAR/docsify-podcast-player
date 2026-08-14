@@ -44,12 +44,6 @@ browser — so the repo never has to store the m4a.
       downloadBusyLabel:  '⏳ Préparation…',
       downloadErrorLabel: 'Téléchargement indisponible.',
       ts2m4aCdn:          'https://gllmar.github.io/docsify-podcast-player/ts2m4a.js',
-      // Optional: fn(resolvedSrc, audioEl) → download URL. Use it when the
-      // audio src is not a URL your site's service worker can answer — e.g.
-      // remote-repo pages whose media points at codeberg API URLs — and map
-      // it to a same-origin route your SW synthesizes. Default: same URL
-      // with .m3u8 → .m4a.
-      downloadUrl:        null,
       coverPattern:       '{stem}-cover.png', // {stem} = audio file without extension
       chapterLabel:       'Chapitres',
       transcriptLabel:    'Transcript',
@@ -85,22 +79,21 @@ Chapters format (`episode.json`):
 
 ## Download & service worker
 
-The download button targets the real `…/{stem}.m4a` URL, so copy-link works
-everywhere. When the audio src is rewritten by a third-party plugin (e.g.
-docsify-remote-repo rewrites media to `https://codeberg.org/api/v1/...`
-URLs, which no service worker can intercept), set `downloadUrl` to map the
-resolved src to a same-origin `.m4a` route served by your own SW.
-Whether a click actually downloads depends on what answers that URL:
+The download button targets the real `…/{stem}.m4a` URL (same-origin —
+docsify-remote-repo resolves codeberg media through Pages URLs), so
+copy-link works everywhere a service worker is installed. Whether a click
+actually downloads depends on what answers that URL:
 
-1. **Service worker active** (recommended): [`sw.js`](./sw.js) intercepts
-   `.m4a` requests, remuxes the HLS segments with
-   [`ts2m4a.js`](./ts2m4a.js) (`importScripts`), and responds with
-   `Content-Disposition: attachment`. The same URL serves every visitor that
-   has the SW installed; results are cached in Cache Storage.
-2. **No service worker** (first visit, or static hosting without one): the
-   player catches the click and remuxes in the main thread (lazy-loads
-   `ts2m4a.js` from `ts2m4aCdn`), downloading a blob. Copy-link still yields
-   the real URL.
+1. **Service worker active and in scope** (recommended): [`sw.js`](./sw.js)
+   intercepts `.m4a` requests, remuxes the HLS segments with `ts2m4a`
+   (`importScripts` from the plugin CDN — cached with the SW script at
+   install), and responds with `Content-Disposition: attachment`. Results
+   are cached in Cache Storage.
+2. **No service worker, or the download URL is outside its scope** (e.g. a
+   remote-repo page whose media lives under `/sn/` while the site's SW is
+   scoped to `/582705MO-2026-01/`): the player catches the click and remuxes
+   in the main thread (lazy-loads `ts2m4a.js` from `ts2m4aCdn`), downloading
+   a blob. Copy-link still yields the real URL.
 
 Register the SW once in `index.html` (after the docsify config):
 
@@ -114,18 +107,11 @@ Register the SW once in `index.html` (after the docsify config):
 </script>
 ```
 
-Expected layout (adjust the `importScripts` path in `sw.js` for your site):
+The only file to track in your site is `sw.js` (copy it from this repo;
+`ts2m4a` is imported from the CDN, no vendored copy).
 
-```
-sw.js
-vendor/ts2m4a/ts2m4a.js
-```
-
-Route mapping handled by `ts2m4a.handleM4aRequest`:
-
-- local: `…/{stem}.m4a` → `…/{stem}.m3u8` (same directory)
-- `/remote/codeberg.org/{owner}/{repo}/…` →
-  `https://{owner}.codeberg.page/{repo}/…` (docsify-remote-repo convention)
+Route mapping (`ts2m4a.handleM4aRequest`): `…/{stem}.m4a` →
+`…/{stem}.m3u8` (same directory, same origin).
 
 Notes:
 

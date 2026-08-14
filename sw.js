@@ -14,15 +14,15 @@
  *     ).then(function (r) { r.update(); });
  *   }
  *
- * Layout expected by this file (adjust importScripts for your site):
- *   sw.js
- *   vendor/ts2m4a/ts2m4a.js
+ * ts2m4a is imported from the plugin CDN (no vendored copy needed).
  *
- * Route mapping handled by ts2m4a.handleM4aRequest:
- *   local:  …/{stem}.m4a  →  …/{stem}.m3u8 (same directory)
- *   remote: /remote/codeberg.org/{owner}/{repo}/…  →  https://{owner}.codeberg.page/{repo}/…
+ * Route mapping (ts2m4a.handleM4aRequest): …/{stem}.m4a →
+ * …/{stem}.m3u8 (same directory, same origin). Remote-repo pages resolve
+ * codeberg media through Pages URLs, so downloads are always same-origin.
  */
-importScripts('vendor/ts2m4a/ts2m4a.js');
+// ts2m4a comes from the plugin CDN; the import is cached with this
+// SW script at install time (bump ?v= when ts2m4a.VERSION changes).
+importScripts('https://gllmar.github.io/docsify-podcast-player/ts2m4a.js?v=1.0.2');
 
 var cacheName = 'ts2m4a-' + self.ts2m4a.VERSION;
 
@@ -44,7 +44,6 @@ self.addEventListener('fetch', function (e) {
   if (e.request.method !== 'GET') return;
   if (!/\.m4a$/i.test(url.pathname)) return;
   e.respondWith(self.ts2m4a.handleM4aRequest(url, {
-    scope: self.registration.scope,
     fetchImpl: self.fetch.bind(self),
     cacheImpl: {
       match: function (key) {

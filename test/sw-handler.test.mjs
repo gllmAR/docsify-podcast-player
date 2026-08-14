@@ -65,27 +65,6 @@ test('cache hit skips synthesis', async (t) => {
   assert.equal(fetches, first, 'no network on cache hit');
 });
 
-test('/remote/ codeberg mapping is synthesized from the pages URL', async (t) => {
-  const fx = buildFixture();
-  if (!fx) return t.skip('ffmpeg not available');
-  let m3u8Requested = null;
-  const { env } = makeEnv();
-  env.fetchImpl = async (url) => {
-    const u = String(url);
-    if (u === 'https://tim-montmorency.codeberg.page/sn/episodes/01/x.m3u8') {
-      m3u8Requested = u;
-      return { ok: true, status: 200, text: async () => fx.m3u8,
-               arrayBuffer: async () => new Uint8Array(0).buffer };
-    }
-    return makeFixtureFetch(fx)(u);
-  };
-  const resp = await ts2m4a.handleM4aRequest(
-    'https://site.test/remote/codeberg.org/tim-montmorency/sn/episodes/01/x.m4a', env);
-  assert.equal(resp.status, 200);
-  assert.equal(m3u8Requested,
-    'https://tim-montmorency.codeberg.page/sn/episodes/01/x.m3u8');
-});
-
 test('synthesis failure → 503 text response (never a corrupt file)', async () => {
   const { env } = makeEnv();
   env.fetchImpl = async () => {

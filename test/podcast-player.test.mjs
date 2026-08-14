@@ -205,7 +205,8 @@ test('data-download overrides the href', () => {
 test('click with a controlling service worker lets the default navigation happen', () => {
   const w = boot(PAGE_HTML);
   Object.defineProperty(w.navigator, 'serviceWorker', {
-    value: { controller: {} }, configurable: true,
+    value: { controller: { scriptURL: 'https://example.com/sw.js' } },
+    configurable: true,
   });
   w.ts2m4a = { tsToM4a: async () => { throw new Error('must not be called'); } };
   const a = w.document.querySelector('.podcast-player-download');
@@ -243,19 +244,25 @@ test('click without SW falls back to main-thread remux + blob download', async (
   assert.ok(!blob || blob.size === 3, 'blob carries the remuxed bytes');
 });
 
-test('downloadUrl hook rewrites the anchor href (remote-repo pages)', () => {
-  // Simulates a remote-repo page whose audio src is a codeberg API URL.
+test('click falls back when the download URL is outside the SW scope (remote-repo pages)', async () => {
   const html = `<div class="markdown-section">
-    <audio controls src="https://codeberg.org/api/v1/repos/tim-montmorency/sn/media/episodes/01/x.m3u8"></audio>
+    <audio controls src="https://tim-montmorency.codeberg.page/sn/episodes/01/x.m3u8"></audio>
   </div>`;
-  const w = boot(html, { overrides: { podcastPlayer: {
-    downloadUrl: (src) => src
-      .replace(/\.m3u8$/, '.m4a')
-      .replace(/^https?:\/\/[^/]+/, 'https://dl.test'),
-  } } });
+  const w = boot(html);
+  // Course SW controls the page but its scope is /582705MO-2026-01/;
+  // the download href lives under /sn/ → outside the scope.
+  Object.defineProperty(w.navigator, 'serviceWorker', {
+    value: { controller: { scriptURL: 'https://tim-montmorency.codeberg.page/582705MO-2026-01/sw.js' } },
+    configurable: true,
+  });
+  let remuxed = false;
+  w.ts2m4a = { tsToM4a: async () => { remuxed = true; return new Uint8Array([1]); } };
+  w.URL.createObjectURL = () => 'blob:fake';
+  w.URL.revokeObjectURL = () => {};
   const a = w.document.querySelector('.podcast-player-download');
-  assert.ok(a.href.startsWith('https://dl.test/'),
-    `hook controls the host (got ${a.href})`);
-  assert.ok(a.href.endsWith('/media/episodes/01/x.m4a'),
-    `hook keeps the path + .m4a (got ${a.href})`);
+  const ev = new w.Event('click', { cancelable: true });
+  a.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true, 'fallback intercepts out-of-scope downloads');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(remuxed, true, 'main-thread remux ran');
 });
