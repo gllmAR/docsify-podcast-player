@@ -168,3 +168,19 @@ test('toM3u8Url: local same-origin mapping', () => {
     'https://tim-montmorency.codeberg.page/sn/episodes/01/x.m3u8');
 });
 
+test('toM3u8Url: /remote/ under a basePath scope (course site case)', () => {
+  const url = 'https://tim-montmorency.codeberg.page/582705MO-2026-1/remote/codeberg.org/tim-montmorency/sn/episodes/01-bitkeeper-git/balado-s01e01-bitkeeper-git.m4a';
+  const mapped = ts2m4a.toM3u8Url(new URL(url), {
+    scope: 'https://tim-montmorency.codeberg.page/582705MO-2026-1/',
+  });
+  assert.equal(mapped,
+    'https://tim-montmorency.codeberg.page/sn/episodes/01-bitkeeper-git/balado-s01e01-bitkeeper-git.m3u8');
+});
+
+test('toM3u8Url: non-codeberg /remote/ host → null', () => {
+  const mapped = ts2m4a.toM3u8Url(
+    new URL('https://site.test/remote/gitlab.com/foo/bar/x.m4a'),
+    { scope: 'https://site.test/' });
+  assert.equal(mapped, null);
+});
+

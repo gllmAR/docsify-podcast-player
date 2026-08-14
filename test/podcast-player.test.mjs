@@ -20,7 +20,7 @@ const PAGE_HTML = `<!doctype html><html><head></head><body>
 
 function boot(html, opts) {
   opts = opts || {};
-  const { overrides, mediaSession, mediaMetadata } = opts;
+  const { overrides, mediaSession, mediaMetadata, serviceWorker } = opts;
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
@@ -36,6 +36,10 @@ function boot(html, opts) {
       { value: mediaSession, configurable: true });
   }
   if (mediaMetadata) window.MediaMetadata = mediaMetadata;
+  if (serviceWorker) {
+    Object.defineProperty(window.navigator, 'serviceWorker',
+      { value: serviceWorker, configurable: true });
+  }
   // No real HLS engine in jsdom: leave window.Hls undefined.
   window.fetch = async (u) => {
     if (String(u).endsWith('.json')) {
@@ -210,6 +214,52 @@ test('click with a controlling service worker lets the default navigation happen
   });
   w.ts2m4a = { tsToM4a: async () => { throw new Error('must not be called'); } };
   const a = w.document.querySelector('.podcast-player-download');
+  const ev = new w.Event('click', { cancelable: true });
+  a.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, false, 'SW path: default navigation');
+});
+
+test('click without SW falls back to main-thread remux + blob download', async () => {
+  const w = boot(PAGE_HTML);
+  let created = null;
+  let tmpDownload = null;
+  w.ts2m4a = { tsToM4a: async () => new Uint8Array([1, 2, 3]) };
+  w.URL.createObjectURL = () => 'blob:fake';
+  w.URL.revokeObjectURL = () => {};
+  const origCreate = w.document.createElement.bind(w.document);
+  w.document.createElement = (tag) => {
+    const el = origCreate(tag);
+    if (tag === 'a') {
+      const origClick = el.click.bind(el);
+      el.click = () => { tmpDownload = el.download; origClick(); };
+    }
+    return el;
+  };
+
+  const a = w.document.querySelector('.podcast-player-download');
+  const ev = new w.Event('click', { cancelable: true });
+  a.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true, 'fallback intercepts the click');
+  assert.match(a.textContent, /Préparation/, 'busy label while remuxing');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(a.textContent, '⬇ Télécharger', 'label restored');
+  assert.equal(tmpDownload, 'ep.m4a', 'blob download filename');
+  const blob = created;
+  assert.ok(!blob || blob.size === 3, 'blob carries the remuxed bytes');
+});
+
+test('pages-URL downloads rewrite to an in-scope /remote/ route (course site)', () => {
+  const html = `<div class="markdown-section">
+    <audio controls src="https://tim-montmorency.codeberg.page/sn/episodes/01/x.m3u8"></audio>
+  </div>`;
+  // Course SW controls the page from the start (same origin as the page).
+  const w = boot(html, {
+    serviceWorker: { controller: { scriptURL: 'https://example.com/sw.js' } },
+  });
+  w.ts2m4a = { tsToM4a: async () => { throw new Error('must not remux'); } };
+  const a = w.document.querySelector('.podcast-player-download');
+  assert.ok(a.href.startsWith('https://example.com/remote/codeberg.org/tim-montmorency/sn/episodes/01/x.m4a'),
+    `href rewritten into the SW scope (got ${a.href})`);
   const ev = new w.Event('click', { cancelable: true });
   a.dispatchEvent(ev);
   assert.equal(ev.defaultPrevented, false, 'SW path: default navigation');

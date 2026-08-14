@@ -79,9 +79,12 @@ Chapters format (`episode.json`):
 
 ## Download & service worker
 
-The download button targets the real `…/{stem}.m4a` URL (same-origin —
-docsify-remote-repo resolves codeberg media through Pages URLs), so
-copy-link works everywhere a service worker is installed. Whether a click
+The download button targets a real `.m4a` URL (docsify-remote-repo
+resolves codeberg media through same-origin Pages URLs). When a service
+worker controls the page, same-origin hrefs outside its scope (e.g.
+remote-repo media under `/sn/` on a site scoped to `/582705MO-2026-1/`) are
+rewritten into scope-local `/remote/…` routes the site's SW answers — so
+click, middle-click, new tab and copy-paste all download. Whether a click
 actually downloads depends on what answers that URL:
 
 1. **Service worker active and in scope** (recommended): [`sw.js`](./sw.js)
@@ -89,11 +92,9 @@ actually downloads depends on what answers that URL:
    (`importScripts` from the plugin CDN — cached with the SW script at
    install), and responds with `Content-Disposition: attachment`. Results
    are cached in Cache Storage.
-2. **No service worker, or the download URL is outside its scope** (e.g. a
-   remote-repo page whose media lives under `/sn/` while the site's SW is
-   scoped to `/582705MO-2026-1/`): the player catches the click and remuxes
-   in the main thread (lazy-loads `ts2m4a.js` from `ts2m4aCdn`), downloading
-   a blob. Copy-link still yields the real URL.
+2. **No service worker**: the player catches the click and remuxes in the
+   main thread (lazy-loads `ts2m4a.js` from `ts2m4aCdn`), downloading a
+   blob. Copy-link still yields the real URL.
 
 Register the SW once in `index.html` (after the docsify config):
 
@@ -110,8 +111,11 @@ Register the SW once in `index.html` (after the docsify config):
 The only file to track in your site is `sw.js` (copy it from this repo;
 `ts2m4a` is imported from the CDN, no vendored copy).
 
-Route mapping (`ts2m4a.handleM4aRequest`): `…/{stem}.m4a` →
-`…/{stem}.m3u8` (same directory, same origin).
+Route mapping (`ts2m4a.handleM4aRequest`):
+
+- local: `…/{stem}.m4a` → `…/{stem}.m3u8` (same directory, same origin)
+- `/remote/codeberg.org/{owner}/{repo}/…` (scope-relative) →
+  `https://{owner}.codeberg.page/{repo}/…`
 
 Notes:
 

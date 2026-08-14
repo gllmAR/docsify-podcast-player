@@ -25,7 +25,7 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.0.2';
+  var VERSION = '1.0.3';
 
   var SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
@@ -492,7 +492,7 @@
     var path = url.pathname;
     if (!/\.m4a$/i.test(path)) return Promise.resolve(null);
 
-    var m3u8Url = toM3u8Url(url);
+    var m3u8Url = toM3u8Url(url, env);
 
     var cacheKey = url.href;
     var fetchImpl = env.fetchImpl || fetch;
@@ -528,11 +528,24 @@
     return build();
   }
 
-  function toM3u8Url(url) {
-    // Local mapping: the .m3u8 sits next to the .m4a on the same origin.
-    // (Remote-repo pages resolve codeberg media through Pages URLs, so
-    // downloads are always same-origin; no /remote/ virtual routes.)
-    return url.origin + url.pathname.replace(/\.m4a$/i, '.m3u8');
+  function toM3u8Url(url, env) {
+    var full = url.pathname;
+    // /remote/ virtual routes may sit under the site's basePath (the SW
+    // scope); match them scope-relative.
+    var path = full;
+    if (env && env.scope) {
+      var sp = new URL(env.scope).pathname.replace(/\/+$/, '/');
+      if (sp !== '/' && path.indexOf(sp) === 0) path = path.slice(sp.length - 1);
+    }
+    // /remote/{host}/{owner}/{repo}/… → codeberg pages convention
+    var m = /^\/remote\/([^/]+)\/([^/]+)\/([^/]+)(\/.*)$/.exec(path);
+    if (m) {
+      if (m[1] !== 'codeberg.org') return null;
+      return 'https://' + m[2] + '.codeberg.page/' + m[3] +
+             m[4].replace(/\.m4a$/i, '.m3u8');
+    }
+    // Local: the .m3u8 sits next to the .m4a on the same origin
+    return url.origin + full.replace(/\.m4a$/i, '.m3u8');
   }
 
   var ts2m4a = {

@@ -510,6 +510,23 @@
 
     a.href = resolve(src).replace(/\.m3u8(?:[?#].*)?$/i, '.m4a');
 
+    // A download can only be synthesized by the service worker that
+    // controls this page. Same-origin hrefs outside its scope (e.g.
+    // remote-repo media living under /sn/ on this origin) are rewritten
+    // into scope-local /remote/ routes the site's SW answers.
+    if (('serviceWorker' in navigator) && navigator.serviceWorker.controller) {
+      var ctrlScope = navigator.serviceWorker.controller.scriptURL
+        .replace(/[^/]*$/, '');
+      if (a.href.indexOf(ctrlScope) !== 0) {
+        var pages = /^https?:\/\/([^/]+)\.codeberg\.page\/([^/]+)(\/.*)$/
+          .exec(a.href);
+        if (pages) {
+          a.href = location.origin + basePath() + '/remote/codeberg.org/' +
+                   pages[1] + '/' + pages[2] + pages[3];
+        }
+      }
+    }
+
     a.addEventListener('click', function (ev) {
       // The controlling SW only answers URLs inside its own scope. The
       // download href may point at a same-origin path outside it (e.g. a
