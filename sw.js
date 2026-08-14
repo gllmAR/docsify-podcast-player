@@ -44,6 +44,7 @@ self.addEventListener('fetch', function (e) {
   if (e.request.method !== 'GET') return;
   if (!/\.m4a$/i.test(url.pathname)) return;
   e.respondWith(self.ts2m4a.handleM4aRequest(url, {
+    scope: self.registration.scope,
     fetchImpl: self.fetch.bind(self),
     cacheImpl: {
       match: function (key) {
@@ -53,5 +54,7 @@ self.addEventListener('fetch', function (e) {
         return caches.open(cacheName).then(function (c) { return c.put(key, resp); });
       },
     },
+  }).then(function (resp) {
+    return resp || fetch(e.request);   // not our route → normal network
   }));
 });

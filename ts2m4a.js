@@ -25,7 +25,7 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.1';
 
   var SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
@@ -530,7 +530,15 @@
   }
 
   function toM3u8Url(url, env) {
-    var path = url.pathname;
+    var full = url.pathname;
+    // Virtual .m4a routes may sit under the site's basePath (e.g. a SW
+    // scoped to /my-site/ answering /my-site/remote/...). Match the
+    // /remote/ form against the scope-relative path.
+    var path = full;
+    if (env && env.scope) {
+      var sp = new URL(env.scope).pathname.replace(/\/+$/, '/');
+      if (sp !== '/' && path.indexOf(sp) === 0) path = path.slice(sp.length - 1);
+    }
     // /remote/{host}/{owner}/{repo}/… → codeberg pages convention
     var m = /^\/remote\/([^/]+)\/([^/]+)\/([^/]+)(\/.*)$/.exec(path);
     if (m) {
@@ -540,8 +548,8 @@
       }
       return 'https://' + m[2] + '.codeberg.page/' + m[3] + m[4].replace(/\.m4a$/i, '.m3u8');
     }
-    // Local: .m3u8 sits next to the .m4a
-    return url.origin + path.replace(/\.m4a$/i, '.m3u8');
+    // Local: .m3u8 sits next to the .m4a (full path, scope included)
+    return url.origin + full.replace(/\.m4a$/i, '.m3u8');
   }
 
   var ts2m4a = {
