@@ -124,6 +124,11 @@ Notes:
 - Multi-variant playlists: the lowest-bandwidth variant is chosen.
 - iOS Safari: the main-thread blob fallback opens the file in a tab (platform
   limitation); the SW path is unaffected (attachment header).
+- The synthesized file carries iTunes-style metadata (`©nam`/`©ART`/`©alb`/`covr`
+  from the episode `README.md` frontmatter + cover PNG) and a spec-correct
+  `mvhd`/`tkhd` identity matrix, so Spotlight/Quick Look shows title, artist,
+  album and the waveform thumbnail (v1.0.5 fixed a 32-byte matrix that made
+  Quick Look fall back to a generic audio icon).
 
 ## Development
 

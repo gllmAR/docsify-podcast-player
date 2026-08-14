@@ -25,7 +25,7 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.0.3';
+  var VERSION = '1.0.5';
 
   var SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
@@ -35,6 +35,7 @@
   // ── Byte helpers ────────────────────────────────────────────────────
 
   function u16(n) { return [n >> 8 & 0xFF, n & 0xFF]; }
+  function u24(n) { return [n >> 16 & 0xFF, n >> 8 & 0xFF, n & 0xFF]; }
   function u32(n) {
     return [n >>> 24 & 0xFF, n >>> 16 & 0xFF, n >>> 8 & 0xFF, n & 0xFF];
   }
@@ -52,8 +53,18 @@
   }
 
   function str(s) {
+    // Full UTF-8 for text payloads (charCodeAt low bytes would mangle
+    // non-ASCII characters like em-dashes and accented letters).
+    var enc = unescape(encodeURIComponent(s));
+    var out = new Uint8Array(enc.length);
+    for (var i = 0; i < enc.length; i++) out[i] = enc.charCodeAt(i);
+    return out;
+  }
+
+  // Latin-1 bytes for box 4CCs (©nam etc. must stay single-byte).
+  function str4(s) {
     var out = new Uint8Array(s.length);
-    for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xFF;
     return out;
   }
 
@@ -75,7 +86,7 @@
     var out = new Uint8Array(8 + p.length);
     var view = new DataView(out.buffer);
     view.setUint32(0, out.length);
-    out.set(str(type), 4);
+    out.set(str4(type), 4);
     out.set(p, 8);
     return out;
   }
@@ -274,23 +285,33 @@
     ]);
   }
 
-  function esdsBox(asc) {
-    var dsi = descr(0x05, asc);
-    var slc = descr(0x06, new Uint8Array([0x02]));
-    var dcd = descr(0x04, bytes([
-      new Uint8Array([0x40, 0x15, 0, 0, 0]),             // MPEG-4 Audio, streamType 5
-      new Uint8Array(u32(0)),                            // maxBitrate
-      new Uint8Array(u32(0)),                            // avgBitrate
+  // MPEG-4 descriptor length as a 4-byte varint (0x80 0x80 0x80 nn),
+  // matching the style Apple's parsers see from ffmpeg.
+  function descr4(tag, payload) {
+    var len = payload.length;
+    var head = new Uint8Array([tag, 0x80, 0x80, 0x80, len & 0x7F]);
+    return bytes([head, payload]);
+  }
+
+  function esdsBox(asc, opts) {
+    opts = opts || {};
+    var dsi = descr4(0x05, asc);
+    var slc = descr4(0x06, new Uint8Array([0x02]));
+    var dcd = descr4(0x04, bytes([
+      new Uint8Array([0x40, 0x15]),                      // MPEG-4 Audio, streamType 5
+      new Uint8Array(u24(opts.bufferSizeDB || 0)),       // bufferSizeDB
+      new Uint8Array(u32(opts.maxBitrate || 0)),
+      new Uint8Array(u32(opts.avgBitrate || 0)),
       dsi,
     ]));
-    var es = descr(0x03, bytes([
-      new Uint8Array([0, 0, 0]),                         // ES_ID 0, flags 0
+    var es = descr4(0x03, bytes([
+      new Uint8Array([0, 1, 0]),                         // ES_ID 1, flags 0
       dcd, slc,
     ]));
     return fullbox('esds', 0, es);
   }
 
-  function stsdBox(sampleRate, channels, asc) {
+  function stsdBox(sampleRate, channels, asc, esdsOpts) {
     var mp4a = bytes([
       new Uint8Array(6),                                 // reserved
       new Uint8Array([0, 1]),                            // data_reference_index
@@ -303,7 +324,7 @@
     return box('stsd', bytes([
       verFlags(0, 0),
       new Uint8Array([0, 0, 0, 1]),                      // entry_count
-      box('mp4a', bytes([mp4a, esdsBox(asc)])),
+      box('mp4a', bytes([mp4a, esdsBox(asc, esdsOpts)])),
     ]));
   }
 
@@ -314,9 +335,23 @@
     var asc = makeAsc(profile, sampleRate, channels);
     var count = frames.length;
     var duration = count * 1024;                         // AAC frames: 1024 samples
+    // Movie timescale 1000 (ms), like ffmpeg — Apple tools expect it.
+    var movieDuration = Math.round(duration * 1000 / sampleRate);
+    // esds stats from the actual frames
+    var maxFrame = 0;
+    var totalBytes = 0;
+    for (var fi = 0; fi < count; fi++) {
+      if (frames[fi].length > maxFrame) maxFrame = frames[fi].length;
+      totalBytes += frames[fi].length;
+    }
+    var esdsOpts = {
+      bufferSizeDB: maxFrame,
+      maxBitrate: Math.round(maxFrame * 8 * sampleRate / 1024),
+      avgBitrate: Math.round(totalBytes * 8 * sampleRate / duration),
+    };
 
     var stbl = box('stbl', bytes([
-      stsdBox(sampleRate, channels, asc),
+      stsdBox(sampleRate, channels, asc, esdsOpts),
       box('stts', bytes([verFlags(0, 0), new Uint8Array([0, 0, 0, 1]),
         new Uint8Array(u32(count)), new Uint8Array(u32(1024))])),
       box('stsc', bytes([verFlags(0, 0), new Uint8Array([0, 0, 0, 1]),
@@ -331,6 +366,21 @@
       })(),
       box('stco', bytes([verFlags(0, 0), new Uint8Array([0, 0, 0, 1]),
         new Uint8Array(u32(mdatOffset))])),
+      // Audio roll sample group (gapless/priming signalling, as ffmpeg writes)
+      box('sgpd', bytes([
+        new Uint8Array([1, 0, 0, 0]),                    // version 1
+        str4('roll'),
+        new Uint8Array([0, 0, 0, 2]),                    // default_length
+        new Uint8Array([0, 0, 0, 1]),                    // entry_count
+        new Uint8Array([0xFF, 0xFF]),                    // roll_distance -1
+      ])),
+      box('sbgp', bytes([
+        verFlags(0, 0),
+        str4('roll'),
+        new Uint8Array([0, 0, 0, 1]),                    // entry_count
+        new Uint8Array(u32(count)),                      // sample_count (all)
+        new Uint8Array([0, 0, 0, 1]),                    // group_description_index
+      ])),
     ]));
 
     var minf = box('minf', bytes([
@@ -350,7 +400,8 @@
         new Uint8Array([0x55, 0xC4, 0, 0]),              // language 'und'
       ])),
       fullbox('hdlr', 0, bytes([
-        new Uint8Array(4), str('soun'), new Uint8Array(12), new Uint8Array(0),
+        new Uint8Array(4), str4('soun'), new Uint8Array(12),
+        str4('SoundHandler'), new Uint8Array(1),          // name + NUL
       ])),
       minf,
     ]));
@@ -360,32 +411,38 @@
         new Uint8Array(8),
         new Uint8Array([0, 0, 0, 1]),                    // track_ID
         new Uint8Array(4),
-        new Uint8Array(u32(duration)),
+        new Uint8Array(u32(movieDuration)),
         new Uint8Array(8),
         new Uint8Array([0, 0]),                          // layer
         new Uint8Array([0, 0]),                          // alternate_group
         new Uint8Array([0x01, 0x00]),                    // volume 1.0
         new Uint8Array(2),                               // reserved
         new Uint8Array([
-          0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0,
+          0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00,
         ]),
         new Uint8Array(8),                               // width + height
       ])),
+      box('edts', fullbox('elst', 0, bytes([
+        new Uint8Array([0, 0, 0, 1]),                    // entry_count
+        new Uint8Array(u32(movieDuration)),               // segment_duration (movie scale)
+        new Uint8Array(u32(0)),                          // media_time (no priming offset)
+        new Uint8Array([0x00, 0x01, 0x00, 0x00]),        // media_rate 1.0
+      ]))),
       mdia,
     ]));
 
     return box('moov', bytes([
       fullbox('mvhd', 0, bytes([
         new Uint8Array(8),
-        new Uint8Array(u32(sampleRate)),
-        new Uint8Array(u32(duration)),
+        new Uint8Array(u32(1000)),                       // movie timescale (ms)
+        new Uint8Array(u32(movieDuration)),
         new Uint8Array([0x00, 0x01, 0x00, 0x00]),        // rate 1.0
         new Uint8Array([0x01, 0x00]),                    // volume 1.0
         new Uint8Array(10),                              // reserved
         new Uint8Array([
-          0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0,
+          0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00,
         ]),
@@ -393,7 +450,47 @@
         new Uint8Array([0, 0, 0, 2]),                    // next_track_ID
       ])),
       trak,
+      (opts.metadata ? buildMetaBox(opts.metadata) : new Uint8Array(0)),
     ]));
+  }
+
+  // iTunes-style metadata: moov > udta > meta > ilst (©nam/©ART/©alb/covr)
+  function buildMetaBox(metadata) {
+    function dataBox(flags, payload) {
+      return box('data', bytes([
+        verFlags(0, flags),
+        new Uint8Array([0, 0, 0, 0]),            // locale
+        payload,
+      ]));
+    }
+    function item(name, flags, payload) {
+      return box(name, dataBox(flags, payload));
+    }
+    var entries = [];
+    if (metadata.title) {
+      entries.push(item('\u00A9nam', 1, str(metadata.title)));
+    }
+    if (metadata.artist) {
+      entries.push(item('\u00A9ART', 1, str(metadata.artist)));
+      entries.push(item('aART', 1, str(metadata.artist)));
+    }
+    if (metadata.album) {
+      entries.push(item('\u00A9alb', 1, str(metadata.album)));
+    }
+    if (metadata.cover && metadata.cover.length) {
+      // flags 14 = PNG, 13 = JPEG (heuristic from the magic bytes)
+      var coverFlags = (metadata.cover[0] === 0xFF && metadata.cover[1] === 0xD8) ? 13 : 14;
+      entries.push(item('covr', coverFlags, metadata.cover));
+    }
+    var ilst = box('ilst', bytes(entries));
+    var hdlr = fullbox('hdlr', 0, bytes([
+      new Uint8Array(4),
+      str('mdir'), str('appl'),
+      new Uint8Array(12),
+      new Uint8Array(0),
+    ]));
+    var meta = fullbox('meta', 0, bytes([hdlr, ilst]));
+    return box('udta', meta);
   }
 
   function muxMp4(frames, opts) {
@@ -413,6 +510,43 @@
   }
 
   // ── Orchestration ───────────────────────────────────────────────────
+
+  // Parse a simple YAML-ish frontmatter block (--- … ---).
+  function parseFrontmatter(text) {
+    var m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+    if (!m) return {};
+    var out = {};
+    m[1].split(/\r?\n/).forEach(function (line) {
+      var kv = /^([a-zA-Z_]+):\s*"([^"]*)"/.exec(line);
+      if (kv) out[kv[1]] = kv[2];
+    });
+    return out;
+  }
+
+  // Best-effort episode metadata: <dir>/README.md frontmatter + cover PNG.
+  function fetchMetadata(m3u8Url, fetchImpl) {
+    var dir = m3u8Url.replace(/[^/]*$/, '');
+    var stem = m3u8Url.replace(/\.m3u8(?:[?#].*)?$/i, '');
+    var meta = {};
+    return fetchImpl(dir + 'README.md').then(function (r) {
+      if (!r.ok) throw new Error('no README');
+      return r.text();
+    }).then(function (text) {
+      var fm = parseFrontmatter(text);
+      meta.title = fm.title;
+      meta.artist = fm.author;
+      meta.album = fm.author;
+      return fetchImpl(stem + '-cover.png');
+    }).then(function (r) {
+      if (!r.ok) throw new Error('no cover');
+      return r.arrayBuffer();
+    }).then(function (buf) {
+      meta.cover = new Uint8Array(buf);
+      return meta;
+    }).catch(function () {
+      return meta;
+    });
+  }
 
   function tsToM4a(m3u8Url, opts) {
     opts = opts || {};
@@ -455,8 +589,11 @@
         });
         if (!allFrames.length) throw new Error('no audio frames found');
         if (!sampleRate) throw new Error('could not determine sample rate');
-        return muxMp4(allFrames, {
-          sampleRate: sampleRate, channels: channels, profile: profile,
+        return fetchMetadata(playlistUrl, fetchImpl).then(function (metadata) {
+          return muxMp4(allFrames, {
+            sampleRate: sampleRate, channels: channels, profile: profile,
+            metadata: metadata,
+          });
         });
       });
     });
