@@ -25,7 +25,14 @@
       <track kind="subtitles" src="subs.vtt" srclang="fr" label="Français" default>
     </audio>
 
-    <p><a href="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">⬇ Télécharger / ouvrir le flux</a></p>
+    <p>Le bouton « ⬇ Télécharger » génère le fichier .m4a à partir des
+       segments HLS (remux TS→M4A, côté client ou service worker) — aucun
+       .m4a n'est stocké sur le site. Sur cette page, sans service worker,
+       le remux se fait dans le thread principal.</p>
+
+    <p>Le flux de démo ci-dessous est un master multi-variants avec audio AAC :
+       le téléchargement choisit automatiquement la variante la moins gourmande
+       et produit un .m4a de la piste audio.</p>
   </div>
 
   <script>

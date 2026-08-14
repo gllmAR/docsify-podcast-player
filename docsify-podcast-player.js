@@ -13,6 +13,10 @@
  *   - Playlist toolbar with previous / next track
  *   - Playback position persistence (sessionStorage per audio URL)
  *   - Keyboard shortcuts: Space play/pause, arrows seek, M mute, up/down volume
+ *   - Download button (.m3u8 only): links to the real .m4a URL — served by
+ *     the site's service worker (ts2m4a remux) when active, otherwise a
+ *     main-thread TS→M4A remux + blob download. Right-click → copy link
+ *     works natively (real URL).
  *
  * Usage:
  *   window.$docsify.podcastPlayer = {
@@ -20,6 +24,11 @@
  *     showCover:        true,
  *     showChapters:     true,
  *     showTranscript:   true,
+ *     showDownload:     true,
+ *     downloadLabel:    '⬇ Télécharger',
+ *     downloadBusyLabel:'⏳ Préparation…',
+ *     downloadErrorLabel: 'Téléchargement indisponible.',
+ *     ts2m4aCdn:        'https://gllmar.github.io/docsify-podcast-player/ts2m4a.js',
  *     coverPattern:     '{stem}-cover.png',
  *     chapterLabel:     'Chapitres',
  *     transcriptLabel:  'Transcript',
@@ -46,6 +55,11 @@
     showCover: true,
     showChapters: true,
     showTranscript: true,
+    showDownload: true,
+    downloadLabel: '⬇ Télécharger',
+    downloadBusyLabel: '⏳ Préparation…',
+    downloadErrorLabel: 'Téléchargement indisponible.',
+    ts2m4aCdn: 'https://gllmar.github.io/docsify-podcast-player/ts2m4a.js',
     coverPattern: '{stem}-cover.png',
     chapterLabel: 'Chapitres',
     transcriptLabel: 'Transcript',
@@ -447,6 +461,98 @@
     panel.appendChild(frag);
   }
 
+  // ── Download (TS → M4A) ────────────────────────────────────────────
+
+  var ts2m4aPromise = null;
+
+  function loadTs2M4a() {
+    if (window.ts2m4a) return Promise.resolve(window.ts2m4a);
+    if (ts2m4aPromise) return ts2m4aPromise;
+    ts2m4aPromise = new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = settings.ts2m4aCdn;
+      s.onload = function () {
+        if (window.ts2m4a) res(window.ts2m4a);
+        else { ts2m4aPromise = null; rej(new Error('ts2m4a missing')); }
+      };
+      s.onerror = function () { ts2m4aPromise = null; rej(new Error('ts2m4a load failed')); };
+      document.head.appendChild(s);
+    });
+    return ts2m4aPromise;
+  }
+
+  function downloadStem(el) {
+    var src = el.dataset.originalSrc || el.getAttribute('src') || '';
+    return src.split('/').pop().replace(/[?#].*$/, '').replace(/\.m3u8$/i, '');
+  }
+
+  // The download control is a plain anchor pointing at the real .m4a URL:
+  // right-click → "Copy link address" works natively, and pasting the link
+  // yields a proper download wherever the site's service worker is active
+  // (the SW synthesizes the m4a from the HLS segments on fetch). Without a
+  // controlling SW we fall back to a main-thread remux + blob download.
+  function buildDownload(el, wrap) {
+    if (!settings.showDownload) return;
+    var src = el.getAttribute('src') || el.dataset.originalSrc || '';
+    if (!/\.m3u8(?:[?#]|$)/i.test(src)) return;
+
+    var a = document.createElement('a');
+    a.className = 'podcast-player-btn podcast-player-download';
+    a.textContent = settings.downloadLabel;
+    a.download = '';
+
+    var override = el.dataset.download;
+    if (override) {
+      a.href = isAbsolute(override) ? override : resolve(override);
+      wrap.appendChild(a);
+      return;
+    }
+
+    a.href = resolve(src).replace(/\.m3u8(?:[?#].*)?$/i, '.m4a');
+
+    a.addEventListener('click', function (ev) {
+      var swReady = ('serviceWorker' in navigator) && !!navigator.serviceWorker.controller;
+      if (swReady) return;                 // SW answers the real URL
+      ev.preventDefault();
+      remuxAndDownload(el, a);
+    });
+    wrap.appendChild(a);
+  }
+
+  function remuxAndDownload(el, a) {
+    var src = resolve(el.getAttribute('src') || el.dataset.originalSrc || '');
+    var label = a.textContent;
+    a.textContent = settings.downloadBusyLabel;
+    a.setAttribute('aria-disabled', 'true');
+    loadTs2M4a().then(function (ts2m4a) {
+      return ts2m4a.tsToM4a(src, {
+        onProgress: function (i, n) {
+          a.textContent = settings.downloadBusyLabel + ' ' + i + '/' + n;
+        },
+      });
+    }).then(function (buf) {
+      var blob = new Blob([buf], { type: 'audio/mp4' });
+      var url = URL.createObjectURL(blob);
+      var tmp = document.createElement('a');
+      tmp.href = url;
+      tmp.download = downloadStem(el) + '.m4a';
+      document.body.appendChild(tmp);
+      tmp.click();
+      document.body.removeChild(tmp);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+      a.textContent = label;
+      a.removeAttribute('aria-disabled');
+    }).catch(function () {
+      a.textContent = label;
+      a.removeAttribute('aria-disabled');
+      var err = document.createElement('span');
+      err.className = 'podcast-player-error-msg';
+      err.textContent = ' ' + settings.downloadErrorLabel;
+      a.parentNode.insertBefore(err, a.nextSibling);
+      setTimeout(function () { err.remove(); }, 4000);
+    });
+  }
+
   // ── Playlist (prev / next) ──────────────────────────────────────────
 
   function navToEpisode(sel) {
@@ -670,6 +776,7 @@
     addCover(el, wrap);
     buildChapters(el, wrap);
     buildTranscript(el, wrap);
+    buildDownload(el, wrap);
 
     el.addEventListener('loadedmetadata', function () {
       restorePosition(el);
@@ -751,6 +858,8 @@
       '.podcast-player-error { flex: 1 1 100%; color: #c33; font-size: .85em; }',
       '.podcast-player-error-msg { color: #c33; }',
       '.podcast-player-retry { font-size: .85em; }',
+      '.podcast-player-download[aria-disabled="true"] { opacity: .5;',
+      '  cursor: progress; pointer-events: none; }',
       '@keyframes podcast-player-pulse {',
       '  0%, 100% { opacity: .5; } 50% { opacity: 1; }',
       '}',
@@ -785,6 +894,11 @@
       showCover: user.showCover !== undefined ? user.showCover : DEFAULTS.showCover,
       showChapters: user.showChapters !== undefined ? user.showChapters : DEFAULTS.showChapters,
       showTranscript: user.showTranscript !== undefined ? user.showTranscript : DEFAULTS.showTranscript,
+      showDownload: user.showDownload !== undefined ? user.showDownload : DEFAULTS.showDownload,
+      downloadLabel: user.downloadLabel || DEFAULTS.downloadLabel,
+      downloadBusyLabel: user.downloadBusyLabel || DEFAULTS.downloadBusyLabel,
+      downloadErrorLabel: user.downloadErrorLabel || DEFAULTS.downloadErrorLabel,
+      ts2m4aCdn: user.ts2m4aCdn || DEFAULTS.ts2m4aCdn,
       coverPattern: user.coverPattern || DEFAULTS.coverPattern,
       chapterLabel: user.chapterLabel || DEFAULTS.chapterLabel,
       transcriptLabel: user.transcriptLabel || DEFAULTS.transcriptLabel,

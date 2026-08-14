@@ -172,3 +172,73 @@ test('MediaSession metadata is set on play', () => {
   assert.match(metadata.title, /Épisode 1/);
 });
 
+
+// ── Download button (TS → M4A) ────────────────────────────────────────
+
+test('download anchor renders for .m3u8 with the real .m4a href', () => {
+  const w = boot(PAGE_HTML);
+  const a = w.document.querySelector('.podcast-player-download');
+  assert.ok(a, 'download anchor present');
+  assert.equal(a.tagName, 'A');
+  assert.ok(a.href.endsWith('/episodes/01/ep.m4a'),
+    `href points at the .m4a URL (got ${a.href})`);
+  assert.ok(a.hasAttribute('download'), 'download attribute present');
+});
+
+test('no download button for non-HLS sources', () => {
+  const html = `<div class="markdown-section">
+    <audio controls src="ep.mp3"></audio>
+  </div>`;
+  const w = boot(html);
+  assert.equal(w.document.querySelector('.podcast-player-download'), null);
+});
+
+test('data-download overrides the href', () => {
+  const html = `<div class="markdown-section">
+    <audio controls src="ep.m3u8" data-download="direct.m4a"></audio>
+  </div>`;
+  const w = boot(html);
+  const a = w.document.querySelector('.podcast-player-download');
+  assert.ok(a.href.endsWith('/episodes/01/direct.m4a'));
+});
+
+test('click with a controlling service worker lets the default navigation happen', () => {
+  const w = boot(PAGE_HTML);
+  Object.defineProperty(w.navigator, 'serviceWorker', {
+    value: { controller: {} }, configurable: true,
+  });
+  w.ts2m4a = { tsToM4a: async () => { throw new Error('must not be called'); } };
+  const a = w.document.querySelector('.podcast-player-download');
+  const ev = new w.Event('click', { cancelable: true });
+  a.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, false, 'SW path: default navigation');
+});
+
+test('click without SW falls back to main-thread remux + blob download', async () => {
+  const w = boot(PAGE_HTML);
+  let created = null;
+  let tmpDownload = null;
+  w.ts2m4a = { tsToM4a: async () => new Uint8Array([1, 2, 3]) };
+  w.URL.createObjectURL = () => 'blob:fake';
+  w.URL.revokeObjectURL = () => {};
+  const origCreate = w.document.createElement.bind(w.document);
+  w.document.createElement = (tag) => {
+    const el = origCreate(tag);
+    if (tag === 'a') {
+      const origClick = el.click.bind(el);
+      el.click = () => { tmpDownload = el.download; origClick(); };
+    }
+    return el;
+  };
+
+  const a = w.document.querySelector('.podcast-player-download');
+  const ev = new w.Event('click', { cancelable: true });
+  a.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true, 'fallback intercepts the click');
+  assert.match(a.textContent, /Préparation/, 'busy label while remuxing');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(a.textContent, '⬇ Télécharger', 'label restored');
+  assert.equal(tmpDownload, 'ep.m4a', 'blob download filename');
+  const blob = created;
+  assert.ok(!blob || blob.size === 3, 'blob carries the remuxed bytes');
+});
