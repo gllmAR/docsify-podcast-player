@@ -305,6 +305,32 @@ test('chapters JSON v1.2.0 wrapper renders the same list as a bare array', async
   assert.match(items[0].textContent, /Générique/);
 });
 
+test('per-chapter cover swap + current-chapter label follow timeupdate', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 10));
+  const audio = w.document.querySelector('audio');
+  const cover = w.document.querySelector('.podcast-player-cover');
+  const now = w.document.querySelector('.podcast-player-chapter-now');
+  assert.ok(cover && now, 'cover and chapter label present');
+  assert.ok(cover.getAttribute('src').endsWith('/episodes/01/ep-cover.png'),
+    'starts with the episode cover');
+
+  // Chapter 1 (Générique, img ch1.jpg) starts at 0.
+  Object.defineProperty(audio, 'currentTime', { value: 5, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.ok(cover.getAttribute('src').endsWith('/episodes/01/ch1.jpg'),
+    `cover swapped to the chapter img (got ${cover.getAttribute('src')})`);
+  assert.equal(now.textContent, 'Générique');
+  assert.equal(now.style.display, '');
+
+  // Chapter 2 (Introduction, no img) starts at 30 → restore episode cover.
+  Object.defineProperty(audio, 'currentTime', { value: 35, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.ok(cover.getAttribute('src').endsWith('/episodes/01/ep-cover.png'),
+    'cover restored when the chapter has no img');
+  assert.equal(now.textContent, 'Introduction');
+});
+
 
 // ── Download button (TS → M4A) ────────────────────────────────────────
 

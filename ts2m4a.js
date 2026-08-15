@@ -32,7 +32,7 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.0.6';
+  var VERSION = '1.0.7';
 
   var SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
@@ -802,7 +802,7 @@
       meta.album = fm.author;
       meta.trackNumber = fm.episode;
       meta.date = fm.date;
-      meta.grouping = fm.grouping;
+      meta.grouping = fm.grouping || (fm.season ? 'Saison ' + fm.season : '');
       meta.compilation = fm.compilation;
       meta.gapless = fm.gapless;
       return fetchImpl(stem + '-cover.png');

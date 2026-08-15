@@ -249,6 +249,31 @@ test('parseFrontmatter: quoted, bare numbers, booleans', () => {
   assert.equal(fm.date, '2026-08-14');
 });
 
+test('fetchMetadata: season maps to the ©grp grouping tag', async (t) => {
+  const fx = buildFixture();
+  if (!fx) return t.skip('ffmpeg not available');
+  const base = fx.playlistUrl.replace(/playlist\.m3u8$/, '');
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.endsWith('README.md')) {
+      return { ok: true, status: 200, text: async () =>
+        '---\ntitle: "Épisode test"\nauthor: "Balado SN"\nepisode: 7\nseason: 2\ndate: "2026-08-14"\n---\n' };
+    }
+    if (u.endsWith('-cover.png')) return { ok: false, status: 404 };
+    return makeFixtureFetch(fx)(url);
+  };
+  const out = await ts2m4a.tsToM4a(fx.playlistUrl, { fetchImpl });
+  const dir = mkdtempSync(path.join(tmpdir(), 'ts2m4a-seas-'));
+  const m4aPath = path.join(dir, 'out.m4a');
+  writeFileSync(m4aPath, Buffer.from(out));
+  const probe = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error', '-show_entries', 'format_tags=grouping,date', '-of', 'json', m4aPath,
+  ]).toString());
+  const tags = probe.format.tags || {};
+  assert.equal(tags.grouping, 'Saison 2');
+  assert.equal(tags.date, '2026-08-14');
+});
+
 test('tsToM4a end-to-end fetches chapters.json + .vtt and muxes them', async (t) => {
   const fx = buildFixture();
   if (!fx) return t.skip('ffmpeg not available');

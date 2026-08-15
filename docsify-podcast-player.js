@@ -269,6 +269,7 @@
     img.loading = 'lazy';
     img.src = url;
     el._coverUrl = url;
+    el._coverImg = img;
     img.addEventListener('load', function () {
       if (img.naturalWidth && img.naturalHeight) {
         el._coverSize = img.naturalWidth + 'x' + img.naturalHeight;
@@ -325,6 +326,32 @@
       }
       items.forEach(function (li) { li.classList.remove('active'); });
       if (items[idx]) items[idx].classList.add('active');
+      return idx;
+    }
+
+    // Chapter-scoped presentation: swap the visible cover to the chapter's
+    // img (when present) and show the current chapter title — works in every
+    // browser (MediaSession chapterInfo artwork is Chromium-only today).
+    function updateChapterPresentation(el, chapters, t) {
+      var idx = highlight(list, chapters, t);
+      var ch = chapters[idx] || null;
+      if (el._chapterNowEl) {
+        el._chapterNowEl.textContent = ch && ch.title ? ch.title : '';
+        el._chapterNowEl.style.display = (ch && ch.title) ? '' : 'none';
+      }
+      var target = el._coverUrl;
+      if (ch && ch.img) {
+        target = isAbsolute(ch.img) ? ch.img : resolve(ch.img);
+      }
+      if (el._coverImg && target && el._coverImg.getAttribute('src') !== target) {
+        el._coverImg.src = target;
+      }
+      if (el._lastChapterIdx !== idx) {
+        el._lastChapterIdx = idx;
+        if (activeAudio === el || el.paused === false) {
+          updateMediaSession(el, playlist.findIndex(function (p) { return p.el === el; }));
+        }
+      }
     }
 
     var url = chaptersUrl(el);
@@ -334,6 +361,11 @@
     var sum = document.createElement('summary');
     sum.textContent = settings.chapterLabel;
     box.appendChild(sum);
+    var now = document.createElement('span');
+    now.className = 'podcast-player-chapter-now';
+    now.style.display = 'none';
+    el._chapterNowEl = now;
+    box.appendChild(now);
     var list = document.createElement('ol');
     box.appendChild(list);
 
@@ -369,7 +401,9 @@
     wrap.appendChild(box);
 
     el.addEventListener('timeupdate', function () {
-      if (chapterDataCache[url]) highlight(list, chapterDataCache[url], el.currentTime);
+      if (chapterDataCache[url]) {
+        updateChapterPresentation(el, chapterDataCache[url], el.currentTime);
+      }
     });
   }
 
@@ -930,6 +964,8 @@
       '.podcast-player-chapters { flex: 1 1 100%; font-size: .9em; }',
       '.podcast-player-chapters summary { cursor: pointer; font-weight: 600;',
       '  margin: .25em 0; }',
+      '.podcast-player-chapter-now { display: block; font-size: .85em;',
+      '  color: var(--theme-color, #36c); margin: .1em 0 .25em;',
       '.podcast-player-chapters ol { margin: .25em 0; padding-left: 1.4em; }',
       '.podcast-player-chapters li { border-radius: 3px; padding: 0 .25em;',
       '  transition: background .15s; }',
