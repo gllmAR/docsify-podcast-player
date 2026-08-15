@@ -693,6 +693,21 @@ test('v2: native audio controls are visually hidden once enhanced', () => {
   assert.match(css, /--pp-accent/, 'design tokens present');
 });
 
+test('download passes page metadata (title/artist/album/cover) to the muxer', async () => {
+  const w = boot(PAGE_HTML);
+  let captured = null;
+  w.ts2m4a = { tsToM4a: async (src, opts) => { captured = opts; return new Uint8Array(4); } };
+  w.fetch = async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(8) });
+  const a = w.document.querySelector('.podcast-player-download');
+  a.click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(captured, 'tsToM4a called with options');
+  assert.equal(captured.metadata.title, 'Épisode 1', 'page title forwarded');
+  assert.equal(captured.metadata.artist, 'Podcast', 'artist forwarded');
+  assert.equal(captured.metadata.album, 'Podcast', 'album forwarded');
+  assert.equal(captured.metadata.cover.length, 8, 'cover fetched and passed as bytes');
+});
+
 test('v2: download failure announces via role=alert and live region', async () => {
   const w = boot(PAGE_HTML);
   w.ts2m4a = { tsToM4a: async () => { throw new Error('boom'); } };

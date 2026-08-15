@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.9';
+  var PLUGIN_VERSION = '1.6.10';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -428,7 +428,13 @@
         }
       }
     });
-    img.addEventListener('error', function () { img.remove(); });
+    img.addEventListener('error', function () {
+      // No cover on this episode: drop the image and keep MediaSession
+      // artwork from pointing at a broken URL.
+      img.remove();
+      el._coverUrl = '';
+      updateMediaSession(el, playlist.findIndex(function (p) { return p.el === el; }));
+    });
     mainRow.insertBefore(img, mainRow.firstChild);
   }
 
@@ -1362,10 +1368,30 @@
     a.setAttribute('aria-disabled', 'true');
     a.setAttribute('aria-busy', 'true');
     loadTs2M4a().then(function (ts2m4a) {
-      return ts2m4a.tsToM4a(src, {
-        onProgress: function (i, n) {
-          a.textContent = settings.downloadBusyLabel + ' ' + i + '/' + n;
-        },
+      // Cover art + tags are known on the page: pass them to the muxer so
+      // the M4A carries the real cover (any format, data-cover included)
+      // and the visible title — not only the best-effort README/cover.png.
+      var coverPromise = el._coverUrl
+        ? fetch(el._coverUrl).then(function (r) {
+            return r.ok ? r.arrayBuffer() : null;
+          }).catch(function () { return null; })
+        : Promise.resolve(null);
+      return coverPromise.then(function (buf) {
+        var index = playlist.findIndex(function (p) { return p.el === el; });
+        var metadata = {
+          title: trackTitle(el, index),
+          artist: settings.artist,
+          album: settings.album,
+        };
+        if (el.dataset.episode) metadata.trackNumber = el.dataset.episode;
+        if (el.dataset.date) metadata.date = el.dataset.date;
+        if (buf) metadata.cover = new Uint8Array(buf);
+        return ts2m4a.tsToM4a(src, {
+          onProgress: function (i, n) {
+            a.textContent = settings.downloadBusyLabel + ' ' + i + '/' + n;
+          },
+          metadata: metadata,
+        });
       });
     }).then(function (buf) {
       var blob = new Blob([buf], { type: 'audio/mp4' });
@@ -2435,6 +2461,7 @@
     var cover = document.createElement('img');
     cover.className = 'pp-global-cover';
     cover.alt = '';
+    cover.addEventListener('error', function () { cover.style.display = 'none'; });
     bar.appendChild(cover);
     var meta = document.createElement('div');
     meta.className = 'pp-global-meta';

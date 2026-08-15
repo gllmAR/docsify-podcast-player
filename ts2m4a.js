@@ -32,7 +32,7 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.0.7';
+  var VERSION = '1.0.8';
 
   var SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
@@ -339,21 +339,48 @@
   // and a QuickTime chapter track (from the episode chapters JSON). The
   // audio trak gets a `tref` → `chap` reference when chapters are present.
   // Returns [{ kind: 'subtitle'|'chapter', handler, items: [{ text, durationMs }] }].
+  //
+  // Sync contract: every sample keeps its ORIGINAL timestamp. Blank
+  // (empty-text) samples are inserted to cover leading silence and gaps
+  // between cues, so the rendered track timeline matches the source VTT /
+  // chapters JSON exactly — packed-contiguous cues would drift whenever a
+  // cue does not start where the previous one ended.
   function textTrackSpecs(subtitles, chapters, movieDurationMs) {
     var specs = [];
+    // items: [{ text, startMs, durationMs }] sorted by startMs.
+    // → flat sample list with blank fillers, clamped to the movie duration.
+    function fill(items) {
+      var out = [];
+      var cursor = 0;
+      items.forEach(function (it) {
+        var start = Math.max(0, Math.round(it.startMs));
+        var dur = Math.max(0, Math.round(it.durationMs));
+        if (start >= movieDurationMs || dur <= 0) return;   // beyond the movie
+        if (start + dur > movieDurationMs) dur = Math.max(0, movieDurationMs - start);
+        if (start > cursor) {
+          out.push({ text: '', durationMs: start - cursor });  // gap filler
+          cursor = start;
+        }
+        out.push({ text: it.text, durationMs: dur });
+        cursor = start + dur;
+      });
+      return out;
+    }
     if (Array.isArray(subtitles) && subtitles.length) {
-      var sItems = [];
+      var sRaw = [];
       subtitles.forEach(function (c) {
         var t = String(c.text || '').replace(/\s+/g, ' ').trim();
         var start = parseFloat(c.start);
         var end = parseFloat(c.end);
         if (!t || !isFinite(start) || !isFinite(end) || end <= start) return;
-        sItems.push({ text: t, durationMs: Math.round((end - start) * 1000) });
+        sRaw.push({ text: t, startMs: start * 1000, durationMs: (end - start) * 1000 });
       });
+      sRaw.sort(function (a, b) { return a.startMs - b.startMs; });
+      var sItems = fill(sRaw);
       if (sItems.length) specs.push({ kind: 'subtitle', handler: 'sbtl', items: sItems });
     }
     if (Array.isArray(chapters) && chapters.length) {
-      var cItems = [];
+      var cRaw = [];
       chapters.forEach(function (c, i) {
         var t = String(c.title || '').trim();
         var start = parseFloat(c.startTime);
@@ -362,10 +389,11 @@
           ? parseFloat(chapters[i + 1].startTime)
           : movieDurationMs / 1000;
         if (!isFinite(end)) end = movieDurationMs / 1000;
-        var dur = Math.round((end - start) * 1000);
-        if (dur <= 0) return;
-        cItems.push({ text: t, durationMs: dur });
+        if (end <= start) return;
+        cRaw.push({ text: t, startMs: start * 1000, durationMs: (end - start) * 1000 });
       });
+      cRaw.sort(function (a, b) { return a.startMs - b.startMs; });
+      var cItems = fill(cRaw);
       if (cItems.length) specs.push({ kind: 'chapter', handler: 'text', items: cItems });
     }
     return specs;
@@ -805,7 +833,10 @@
       meta.grouping = fm.grouping || (fm.season ? 'Saison ' + fm.season : '');
       meta.compilation = fm.compilation;
       meta.gapless = fm.gapless;
-      return fetchImpl(stem + '-cover.png');
+      return fetchImpl(stem + '-cover.png').then(function (r) {
+        if (r.ok) return r;
+        return fetchImpl(stem + '-cover.jpg');   // jpg covers fall back
+      });
     }).then(function (r) {
       if (!r.ok) throw new Error('no cover');
       return r.arrayBuffer();
@@ -909,6 +940,14 @@
         if (!allFrames.length) throw new Error('no audio frames found');
         if (!sampleRate) throw new Error('could not determine sample rate');
         return fetchMetadata(playlistUrl, fetchImpl).then(function (metadata) {
+          // Caller-known metadata (page title, artist/album, real cover)
+          // wins over the best-effort README.md / cover.png detection.
+          if (opts.metadata) {
+            Object.keys(opts.metadata).forEach(function (k) {
+              var v = opts.metadata[k];
+              if (v !== undefined && v !== null && v !== '') metadata[k] = v;
+            });
+          }
           return muxMp4(allFrames, {
             sampleRate: sampleRate, channels: channels, profile: profile,
             metadata: metadata,

@@ -202,6 +202,54 @@ test('muxMp4: subtitle (tx3g) and chapter (chap) tracks validate with ffprobe', 
   assert.match(probe.chapters[0].tags.title || '', /Intro/);
 });
 
+test('muxMp4: subtitle cues keep their original timestamps (sync)', (t) => {
+  const fx = buildFixture();
+  if (!fx) return t.skip('ffmpeg not available');
+  let state = {};
+  const all = [];
+  let sr = 0, ch = 0, prof = 0;
+  fx.segments.forEach((seg) => {
+    const d = ts2m4a.demuxTs(seg, state);
+    state = d.state;
+    all.push(...d.frames);
+    if (!sr) { sr = d.sampleRate; ch = d.channels; prof = d.profile; }
+  });
+  const out = ts2m4a.muxMp4(all, {
+    sampleRate: sr, channels: ch, profile: prof,
+    subtitles: [
+      { start: 0.5, end: 2.5, text: 'Premier' },
+      { start: 3.0, end: 5.0, text: 'Deuxième' },
+    ],
+    chapters: [
+      { startTime: 0.5, title: 'Intro' },
+      { startTime: 2.5, title: 'Main' },
+    ],
+  });
+  const dir = mkdtempSync(path.join(tmpdir(), 'ts2m4a-sync-'));
+  const m4aPath = path.join(dir, 'out.m4a');
+  writeFileSync(m4aPath, Buffer.from(out));
+  const probe = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error',
+    '-select_streams', 's:0',
+    '-show_entries', 'packet=pts_time',
+    '-of', 'json', m4aPath,
+  ]).toString());
+  const pts = (probe.packets || []).map((p) => parseFloat(p.pts_time));
+  // Expect: blank@0, cue@0.5, blank@2.5, cue@3.0, blank@5.0 … — cues must
+  // sit at their ORIGINAL VTT timestamps, gaps filled with blank samples.
+  assert.ok(pts.length >= 4, `packets at ${pts.join(', ')}`);
+  const near = (a, b) => Math.abs(a - b) < 0.05;
+  assert.ok(pts.some((p) => near(p, 0.5)), `first cue at 0.5 (got ${pts.join(', ')})`);
+  assert.ok(pts.some((p) => near(p, 3.0)), `second cue at 3.0 (got ${pts.join(', ')})`);
+  const probeC = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error', '-show_chapters', '-of', 'json', m4aPath,
+  ]).toString());
+  const intro = (probeC.chapters || []).find((c) => c.tags && c.tags.title === 'Intro');
+  assert.ok(intro, 'Intro chapter present');
+  assert.ok(near(intro.start_time, 0.5),
+    `Intro starts at 0.5 (got ${intro.start_time})`);
+});
+
 test('muxMp4: chapters-only still emits a chap track', (t) => {
   const fx = buildFixture();
   if (!fx) return t.skip('ffmpeg not available');
@@ -310,6 +358,41 @@ test('tsToM4a end-to-end fetches chapters.json + .vtt and muxes them', async (t)
   assert.equal(tags.title, 'Épisode test');
   assert.equal(tags.artist, 'Balado SN');
   assert.equal(tags.track, '7');
+});
+
+test('tsToM4a: opts.metadata overrides fetched tags and embeds the cover', async (t) => {
+  const fx = buildFixture();
+  if (!fx) return t.skip('ffmpeg not available');
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.endsWith('README.md')) {
+      return { ok: true, status: 200, text: async () =>
+        '---\ntitle: "Titre README"\nauthor: "Auteur README"\n---\n' };
+    }
+    return makeFixtureFetch(fx)(url);
+  };
+  const out = await ts2m4a.tsToM4a(fx.playlistUrl, {
+    fetchImpl,
+    metadata: {
+      title: 'Titre depuis la page',
+      artist: 'Artiste page',
+      album: 'Album page',
+      cover: new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3]),
+    },
+  });
+  const dir = mkdtempSync(path.join(tmpdir(), 'ts2m4a-ovr-'));
+  const m4aPath = path.join(dir, 'out.m4a');
+  writeFileSync(m4aPath, Buffer.from(out));
+  const probe = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error', '-show_entries', 'format_tags=title,artist,album', '-of', 'json', m4aPath,
+  ]).toString());
+  const tags = probe.format.tags || {};
+  assert.equal(tags.title, 'Titre depuis la page', 'page title beats README frontmatter');
+  assert.equal(tags.artist, 'Artiste page');
+  assert.equal(tags.album, 'Album page');
+  const buf = Buffer.from(out);
+  assert.ok(buf.indexOf(Buffer.from('covr')) > 0, 'covr box present');
+  assert.ok(buf.indexOf(Buffer.from([0x89, 0x50, 0x4E, 0x47])) > 0, 'PNG payload embedded');
 });
 
 // ── URL mapping ───────────────────────────────────────────────────────
