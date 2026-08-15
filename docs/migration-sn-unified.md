@@ -26,7 +26,7 @@ par docsh.
 
 ## 2. Étapes
 
-### A. docsh — émettre la config podcastPlayer (le seul vrai chantier)
+### A. docsh — émettre la config podcastPlayer — ✅ fait (poussé upstream a699227f)
 
 Dans `docsh/src/docsh/init.py` (subtree sn ; à pousser upstream ensuite) :
 
@@ -56,7 +56,7 @@ Dans `docsh/src/docsh/init.py` (subtree sn ; à pousser upstream ensuite) :
    `podcast_unified` est vrai, absent sinon ; valeurs passées intactes.
 5. `docsh run` côté sn → l'index régénéré contient le bloc.
 
-### B. Activation sn
+### B. Activation sn — ✅ fait (66c3c5e9, déployé 6423056)
 
 - `.docsh.toml` : ajouter `[site.podcast]` (ci-dessus).
 - `docsh run` local → vérifier l'index (bloc présent, script player CDN
@@ -100,8 +100,11 @@ Dans `docsh/src/docsh/init.py` (subtree sn ; à pousser upstream ensuite) :
 ## 4. Ordre de livraison
 
 1. **Player 1.6.2** en CDN — ✅ fait.
-2. **A** (docsh emission + tests) — prochaine étape.
-3. **B** (activation sn + deploy).
-4. **C** (QA checklist) — valider avant de considérer la migration close.
+2. **A** (docsh emission + tests) — ✅ fait (subtree push upstream).
+3. **B** (activation sn + deploy) — ✅ fait ; vérifié en prod :
+   `podcastPlayer: { unified: true, artist: 'Souveraineté numérique',
+   album: 'SN — balado' }`, player 1.6.2 CDN, sw.js 200.
+4. **C** (QA checklist ci-dessous) — **restant** : validation réelle
+   navigateur (écoute + navigation, mobile, VoiceOver…).
 5. Ensuite : `autoAdvance` (backlog) — « à la fin, naviguer vers le
    prochain épisode », qui s'appuiera sur `gLoadedRoute`/`data-next`.
