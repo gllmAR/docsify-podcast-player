@@ -1072,11 +1072,13 @@ test('unified: navigation keeps playing; new episode page shows a banner and swi
   const banner = w.document.querySelector('.pp-now-playing');
   assert.equal(banner.hidden, false, 'now-playing banner shown');
   assert.equal(banner.querySelector('.pp-now-playing-title').textContent, 'Épisode 1');
-  // Surface of B: play switches the global source.
+  assert.ok(banner.querySelector('.pp-goto'), 'go-to-page link in the banner');
+  // Surface of B: play switches the global source and upgrades the page.
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(gAudio.getAttribute('src').indexOf('ep2.m3u8') !== -1, 'switched to episode B');
-  assert.equal(w.document.querySelector('.pp-now-playing').hidden, true, 'banner gone after switch');
+  assert.ok(w.document.querySelector('.pp-controls'), 'B page upgraded to the full player');
+  assert.ok(!w.document.querySelector('.pp-now-playing'), 'banner gone after switch');
 });
 
 test('unified: resume chip loads the saved position into the global player', async () => {
@@ -1100,4 +1102,30 @@ test('unified: same-source play toggles pause instead of reloading', async () =>
   const src = gAudio.getAttribute('src');
   play.click(); // toggle → pause
   assert.equal(gAudio.getAttribute('src'), src, 'source not reloaded on toggle');
+});
+
+test('unified: the page of the loaded episode upgrades to the full player', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(w.document.querySelector('.pp-controls'), 'full controls in the page');
+  assert.ok(w.document.querySelector('.pp-panels'), 'chapters/transcript panels in the page');
+  assert.ok(!w.document.querySelector('.pp-surface'), 'compact surface replaced');
+  assert.ok(w.document.querySelector('.pp-global audio'), 'global audio still in body');
+  assert.ok(w.document.querySelector('.pp-global-bar'), 'bottom bar still present');
+});
+
+test('unified: full-player chapter click seeks the global audio', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 30)); // chapters fetch resolves
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let t = 0;
+  Object.defineProperty(gAudio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  const links = w.document.querySelectorAll('.pp-chapter-link');
+  assert.ok(links.length >= 2, 'chapter buttons present in the full player');
+  links[1].click(); // chapter at 30 s
+  assert.equal(t, 30, 'chapter click seeks the global audio');
 });

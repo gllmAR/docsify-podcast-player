@@ -96,7 +96,11 @@ jusque-là)
 - Tests jsdom : création du conteneur unique, chargement d'un descripteur,
   play/pause/seek sur l'audio global, une seule instance d'audio.
 
-### Phase 2 — Liaison des surfaces de page
+### Phase 2 — Liaison des surfaces de page — ✅ livré (1.6.1)
+(lecteur plein dans la page de l'épisode joué : enhance() paramétré
+`(el, index, mediaEl)` — l'UI complète se lie à l'audio global ;
+`reEnhance()` fait monter la surface en lecteur plein à la bascule ;
+bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 - Les `<audio>` de page deviennent des contrôleurs : clic play →
   `global.load(descriptor)` + `play()` ; état du bouton synchronisé
   (`aria-label`, icône) ; time display de la page reflète le global

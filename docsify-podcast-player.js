@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.0';
+  var PLUGIN_VERSION = '1.6.1';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -121,6 +121,7 @@
       chapters: 'Chapitres', transcript: 'Transcript',
       transcriptFollow: 'Suivre la lecture', transcriptSearch: 'Filtrer le transcript',
       refollow: 'Reprendre le suivi',
+      switchEp: 'Basculer', goToPage: 'Aller à la page',
       followSuspended: 'Suivi de la lecture suspendu',
       followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
@@ -147,6 +148,7 @@
       chapters: 'Chapters', transcript: 'Transcript',
       transcriptFollow: 'Follow playback', transcriptSearch: 'Filter transcript',
       refollow: 'Resume following',
+      switchEp: 'Switch', goToPage: 'Go to page',
       followSuspended: 'Playback following suspended',
       followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
@@ -428,7 +430,7 @@
 
   var chapterDataCache = {};
 
-  function buildChapters(el, wrap, panels) {
+  function buildChapters(media, wrap, panels) {
     if (!settings.showChapters) return;
 
     function render(list, chapters) {
@@ -442,8 +444,8 @@
         a.textContent = formatTime(ch.startTime || 0) + ' \u2014 ' + (ch.title || '');
         a.setAttribute('aria-label', ch.title || ('Chapitre ' + (i + 1)));
         a.addEventListener('click', function () {
-          el.currentTime = parseFloat(ch.startTime || 0);
-          el.play();
+          media.currentTime = parseFloat(ch.startTime || 0);
+          media.play();
           announce(wrap, tpl(settings.labels.cueAt, { t: formatTime(ch.startTime || 0) }));
         });
         li.appendChild(a);
@@ -478,30 +480,30 @@
       return idx;
     }
 
-    function updateChapterPresentation(el, chapters, t) {
+    function updateChapterPresentation(media, chapters, t) {
       var idx = highlight(list, chapters, t);
       var ch = chapters[idx] || null;
-      if (el._chapterNowEl) {
-        el._chapterNowEl.textContent = ch && ch.title ? ch.title : '';
-        el._chapterNowEl.style.display = (ch && ch.title) ? '' : 'none';
+      if (media._chapterNowEl) {
+        media._chapterNowEl.textContent = ch && ch.title ? ch.title : '';
+        media._chapterNowEl.style.display = (ch && ch.title) ? '' : 'none';
       }
-      var target = el._coverUrl;
+      var target = media._coverUrl;
       if (ch && ch.img) {
         target = isAbsolute(ch.img) ? ch.img : resolve(ch.img);
       }
-      if (el._coverImg && target && el._coverImg.getAttribute('src') !== target) {
-        el._coverImg.src = target;
+      if (media._coverImg && target && media._coverImg.getAttribute('src') !== target) {
+        media._coverImg.src = target;
       }
-      if (el._lastChapterIdx !== idx) {
-        el._lastChapterIdx = idx;
-        if (activeAudio === el || el.paused === false) {
-          updateMediaSession(el, playlist.findIndex(function (p) { return p.el === el; }));
+      if (media._lastChapterIdx !== idx) {
+        media._lastChapterIdx = idx;
+        if (activeAudio === media || media.paused === false) {
+          updateMediaSession(media, playlist.findIndex(function (p) { return p.media === media; }));
         }
       }
       return idx;
     }
 
-    var url = chaptersUrl(el);
+    var url = chaptersUrl(media);
     if (!url) return;
     var box = document.createElement('details');
     box.className = 'podcast-player-chapters pp-chapters';
@@ -511,7 +513,7 @@
     var now = document.createElement('span');
     now.className = 'podcast-player-chapter-now pp-now';
     now.style.display = 'none';
-    el._chapterNowEl = now;
+    media._chapterNowEl = now;
     box.appendChild(now);
     var list = document.createElement('ol');
     box.appendChild(list);
@@ -531,11 +533,11 @@
           : (data && Array.isArray(data.chapters) ? data.chapters : []);
         if (!chapters.length) { box.remove(); return; }
         chapterDataCache[url] = chapters;
-        el._chapters = chapters;
-        drawScrubberTicks(el);
+        media._chapters = chapters;
+        drawScrubberTicks(media);
         render(list, chapters);
-        if (activeAudio === el || el.paused === false) {
-          updateMediaSession(el, playlist.findIndex(function(p) { return p.el === el; }));
+        if (activeAudio === media || media.paused === false) {
+          updateMediaSession(media, playlist.findIndex(function(p) { return p.media === media; }));
         }
       }).catch(function () {
         list.innerHTML = '<span class="podcast-player-error-msg">' + settings.errorLabel +
@@ -545,9 +547,9 @@
       });
     };
     loadFn();
-    el.addEventListener('timeupdate', function () {
+    media.addEventListener('timeupdate', function () {
       if (chapterDataCache[url]) {
-        updateChapterPresentation(el, chapterDataCache[url], el.currentTime);
+        updateChapterPresentation(media, chapterDataCache[url], media.currentTime);
       }
     });
   }
@@ -583,7 +585,7 @@
 
   var transcriptCache = {};
 
-  function buildTranscript(el, wrap, panels) {
+  function buildTranscript(media, wrap, panels) {
     if (!settings.showTranscript) return;
     var panelId = 'pp-transcript-' + Math.random().toString(36).slice(2, 8);
     var btn = document.createElement('button');
@@ -602,7 +604,7 @@
     var follow = true;
     if (settings.transcriptFollow === false) follow = false;
 
-    var tUrl = transcriptUrl(el);
+    var tUrl = transcriptUrl(media);
 
     function renderCues(panel, cues, filter) {
       var frag = document.createDocumentFragment();
@@ -617,8 +619,8 @@
         t.textContent = formatTime(cue.start);
         t.setAttribute('aria-label', tpl(settings.labels.cueAt, { t: formatTime(cue.start) }));
         t.addEventListener('click', function () {
-          el.currentTime = cue.start;
-          el.play();
+          media.currentTime = cue.start;
+          media.play();
         });
         p.appendChild(t);
         // Speaker label if present: "<v Hôte>…</v>" → styled element.
@@ -776,9 +778,9 @@
     panels.appendChild(header);
     panels.appendChild(panel);
 
-    el.addEventListener('timeupdate', function () {
+    media.addEventListener('timeupdate', function () {
       if (panel.dataset.loaded && transcriptCache[tUrl]) {
-        updateFollow(transcriptCache[tUrl], el.currentTime);
+        updateFollow(transcriptCache[tUrl], media.currentTime);
       }
     });
   }
@@ -806,7 +808,7 @@
     return span;
   }
 
-  function buildControls(el, wrap, card) {
+  function buildControls(media, wrap, card) {
     var controls = document.createElement('div');
     controls.className = 'pp-controls';
     card.appendChild(controls);
@@ -817,9 +819,9 @@
     play.className = 'podcast-player-btn pp-btn pp-btn-play';
     play.setAttribute('aria-label', settings.labels.play);
     play.appendChild(icon('play'));
-    el._playBtn = play;
+    media._playBtn = play;
     play.addEventListener('click', function () {
-      if (el.paused) el.play(); else el.pause();
+      if (media.paused) media.play(); else media.pause();
     });
     controls.appendChild(play);
 
@@ -830,11 +832,11 @@
       chip.className = 'podcast-player-btn pp-resume';
       chip.hidden = true;
       chip.addEventListener('click', function () {
-        el.currentTime = el._resumeAt || 0;
-        el.play();
+        media.currentTime = media._resumeAt || 0;
+        media.play();
         chip.hidden = true;
       });
-      el._resumeChip = chip;
+      media._resumeChip = chip;
       controls.appendChild(chip);
     }
 
@@ -846,7 +848,7 @@
     back.setAttribute('aria-label', tpl(settings.labels.back, { s: backSec }));
     back.appendChild(icon('back'));
     back.addEventListener('click', function () {
-      el.currentTime = Math.max(0, el.currentTime - backSec);
+      media.currentTime = Math.max(0, media.currentTime - backSec);
     });
     controls.appendChild(back);
 
@@ -856,7 +858,7 @@
     forward.setAttribute('aria-label', tpl(settings.labels.forward, { s: backSec }));
     forward.appendChild(icon('forward'));
     forward.addEventListener('click', function () {
-      el.currentTime = Math.min(el.duration || Infinity, el.currentTime + backSec);
+      media.currentTime = Math.min(media.duration || Infinity, media.currentTime + backSec);
     });
     controls.appendChild(forward);
 
@@ -867,7 +869,7 @@
     chapPrev.setAttribute('aria-label', settings.labels.chapPrev);
     chapPrev.appendChild(icon('chapPrev'));
     chapPrev.disabled = true;
-    chapPrev.addEventListener('click', function () { chapterJump(el, -1); });
+    chapPrev.addEventListener('click', function () { chapterJump(media, -1); });
     controls.appendChild(chapPrev);
 
     var chapNext = document.createElement('button');
@@ -876,10 +878,10 @@
     chapNext.setAttribute('aria-label', settings.labels.chapNext);
     chapNext.appendChild(icon('chapNext'));
     chapNext.disabled = true;
-    chapNext.addEventListener('click', function () { chapterJump(el, 1); });
+    chapNext.addEventListener('click', function () { chapterJump(media, 1); });
     controls.appendChild(chapNext);
-    el._chapPrevBtn = chapPrev;
-    el._chapNextBtn = chapNext;
+    media._chapPrevBtn = chapPrev;
+    media._chapNextBtn = chapNext;
 
     // ── Time ──
     if (settings.showTime !== false) {
@@ -890,13 +892,13 @@
       time.setAttribute('aria-live', 'off');
       time.dateTime = 'PT0S';
       time.textContent = '0:00 / 0:00';
-      el._timeEl = time;
+      media._timeEl = time;
       timeWrap.appendChild(time);
       var remaining = document.createElement('span');
       remaining.className = 'pp-remaining';
       remaining.setAttribute('aria-hidden', 'true');
       remaining.textContent = '0:00';
-      el._remainingEl = remaining;
+      media._remainingEl = remaining;
       timeWrap.appendChild(remaining);
       controls.appendChild(timeWrap);
     }
@@ -908,7 +910,7 @@
     ticks.className = 'pp-ticks';
     ticks.setAttribute('aria-hidden', 'true');
     scrubWrap.appendChild(ticks);
-    el._ticksEl = ticks;
+    media._ticksEl = ticks;
     var scrub = document.createElement('input');
     scrub.type = 'range';
     scrub.className = 'pp-scrubber';
@@ -918,17 +920,17 @@
     scrub.value = 0;
     scrub.setAttribute('aria-label', settings.labels.position);
     scrub.setAttribute('aria-valuetext', '0:00 / 0:00');
-    el._scrubber = scrub;
+    media._scrubber = scrub;
     scrub.addEventListener('input', function () {
       var t = parseFloat(scrub.value) || 0;
-      el.currentTime = t;
-      updateTimeDisplay(el);
+      media.currentTime = t;
+      updateTimeDisplay(media);
     });
     scrub.addEventListener('keydown', function (e) {
-      if (e.key === 'ArrowLeft') { e.preventDefault(); seekBy(el, -backSec); }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); seekBy(el, backSec); }
-      else if (e.key === 'Home') { e.preventDefault(); el.currentTime = 0; }
-      else if (e.key === 'End') { e.preventDefault(); el.currentTime = el.duration || 0; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); seekBy(media, -backSec); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); seekBy(media, backSec); }
+      else if (e.key === 'Home') { e.preventDefault(); media.currentTime = 0; }
+      else if (e.key === 'End') { e.preventDefault(); media.currentTime = media.duration || 0; }
     });
     scrubWrap.appendChild(scrub);
 
@@ -942,7 +944,7 @@
       var r = scrub.getBoundingClientRect();
       var pct = r.width ? (e.clientX - r.left) / r.width : 0;
       pct = Math.max(0, Math.min(1, pct));
-      tip.textContent = formatTime((isFinite(el.duration) ? el.duration : 0) * pct);
+      tip.textContent = formatTime((isFinite(media.duration) ? media.duration : 0) * pct);
       tip.style.left = (pct * 100).toFixed(1) + '%';
     });
     scrub.addEventListener('pointerleave', function () {
@@ -959,20 +961,20 @@
       speed.className = 'podcast-player-btn pp-btn pp-speed';
       speed.setAttribute('aria-label', tpl(settings.labels.speed, { x: 1 }));
       speed.textContent = '1\u00D7';
-      el._speedBtn = speed;
+      media._speedBtn = speed;
       speed.addEventListener('click', function () {
         var opts = settings.speedOptions || [1];
-        var cur = el.playbackRate || 1;
+        var cur = media.playbackRate || 1;
         var next = opts[0];
         for (var i = 0; i < opts.length; i++) {
           if (Math.abs(opts[i] - cur) < 0.001) { next = opts[(i + 1) % opts.length]; break; }
         }
-        el.playbackRate = next;
-        try { sessionStorage.setItem(speedKey(el), String(next)); } catch (_) { /* ignore */ }
+        media.playbackRate = next;
+        try { sessionStorage.setItem(speedKey(media), String(next)); } catch (_) { /* ignore */ }
         speed.textContent = next + '\u00D7';
         speed.setAttribute('aria-label', tpl(settings.labels.speed, { x: next }));
         announce(wrap, tpl(settings.labels.speedChanged, { x: next }));
-        updatePositionState(el);
+        updatePositionState(media);
       });
       controls.appendChild(speed);
     }
@@ -988,9 +990,9 @@
       mute.setAttribute('aria-label', settings.labels.mute);
       mute.appendChild(icon('volume'));
       mute.addEventListener('click', function () {
-        el.muted = !el.muted;
-        syncMuteUI(el);
-        announce(wrap, el.muted ? settings.labels.muted : settings.labels.unmuted);
+        media.muted = !media.muted;
+        syncMuteUI(media);
+        announce(wrap, media.muted ? settings.labels.muted : settings.labels.unmuted);
       });
       volWrap.appendChild(mute);
       var vol = document.createElement('input');
@@ -1004,19 +1006,19 @@
       try {
         var savedVol = parseFloat(localStorage.getItem('pp-volume'));
         if (isFinite(savedVol) && savedVol >= 0 && savedVol <= 1) {
-          el.volume = savedVol;
+          media.volume = savedVol;
           vol.value = String(Math.round(savedVol * 100));
         }
       } catch (_) { /* storage unavailable */ }
       vol.addEventListener('input', function () {
-        el.volume = (parseFloat(vol.value) || 0) / 100;
-        if (el.volume > 0 && el.muted) el.muted = false;
-        syncMuteUI(el);
-        try { localStorage.setItem('pp-volume', String(el.volume)); } catch (_) { /* ignore */ }
+        media.volume = (parseFloat(vol.value) || 0) / 100;
+        if (media.volume > 0 && media.muted) media.muted = false;
+        syncMuteUI(media);
+        try { localStorage.setItem('pp-volume', String(media.volume)); } catch (_) { /* ignore */ }
       });
       volWrap.appendChild(vol);
-      el._muteBtn = mute;
-      el._volRange = vol;
+      media._muteBtn = mute;
+      media._volRange = vol;
       controls.appendChild(volWrap);
     }
 
@@ -1027,38 +1029,38 @@
       help.className = 'podcast-player-btn pp-btn pp-help';
       help.setAttribute('aria-label', settings.labels.help);
       help.appendChild(icon('help'));
-      el._helpBtn = help;
-      help.addEventListener('click', function () { openHelpDialog(wrap, el, help); });
+      media._helpBtn = help;
+      help.addEventListener('click', function () { openHelpDialog(wrap, media, help); });
       controls.appendChild(help);
     }
 
     return controls;
   }
 
-  function syncPlayUI(el, playing) {
-    if (!el._playBtn) return;
-    if (playing === undefined) playing = !el.paused;
-    el._playBtn.innerHTML = '';
-    el._playBtn.appendChild(icon(playing ? 'pause' : 'play'));
-    el._playBtn.setAttribute('aria-label', playing ? settings.labels.pause : settings.labels.play);
+  function syncPlayUI(media, playing) {
+    if (!media._playBtn) return;
+    if (playing === undefined) playing = !media.paused;
+    media._playBtn.innerHTML = '';
+    media._playBtn.appendChild(icon(playing ? 'pause' : 'play'));
+    media._playBtn.setAttribute('aria-label', playing ? settings.labels.pause : settings.labels.play);
   }
 
-  function syncMuteUI(el) {
-    if (!el._muteBtn) return;
-    el._muteBtn.innerHTML = '';
-    el._muteBtn.appendChild(icon(el.muted ? 'muted' : 'volume'));
-    el._muteBtn.setAttribute('aria-pressed', String(!!el.muted));
-    el._muteBtn.setAttribute('aria-label', el.muted ? settings.labels.unmute : settings.labels.mute);
+  function syncMuteUI(media) {
+    if (!media._muteBtn) return;
+    media._muteBtn.innerHTML = '';
+    media._muteBtn.appendChild(icon(media.muted ? 'muted' : 'volume'));
+    media._muteBtn.setAttribute('aria-pressed', String(!!media.muted));
+    media._muteBtn.setAttribute('aria-label', media.muted ? settings.labels.unmute : settings.labels.mute);
   }
 
-  function seekBy(el, delta) {
-    el.currentTime = Math.max(0, Math.min(el.duration || Infinity, el.currentTime + delta));
+  function seekBy(media, delta) {
+    media.currentTime = Math.max(0, Math.min(media.duration || Infinity, media.currentTime + delta));
   }
 
-  function chapterJump(el, dir) {
-    var chapters = el._chapters;
+  function chapterJump(media, dir) {
+    var chapters = media._chapters;
     if (!chapters || !chapters.length) return;
-    var t = el.currentTime;
+    var t = media.currentTime;
     var idx = -1;
     for (var i = 0; i < chapters.length; i++) {
       if (t >= (parseFloat(chapters[i].startTime) || 0)) idx = i;
@@ -1076,13 +1078,13 @@
       target = idx + 1;
     }
     if (target < 0 || target >= chapters.length) return;
-    el.currentTime = parseFloat(chapters[target].startTime) || 0;
-    el.play();
-    announce(wrapFor(el), tpl(settings.labels.cueAt, { t: formatTime(el.currentTime) }));
+    media.currentTime = parseFloat(chapters[target].startTime) || 0;
+    media.play();
+    announce(wrapFor(media), tpl(settings.labels.cueAt, { t: formatTime(media.currentTime) }));
   }
 
-  function wrapFor(el) {
-    return el.closest('.podcast-player') || document.body;
+  function wrapFor(media) {
+    return media.closest('.podcast-player') || document.body;
   }
 
   // Decorative hover interactions only on precise-pointer devices.
@@ -1092,14 +1094,14 @@
     } catch (_) { return false; }
   }
 
-  function drawScrubberTicks(el) {
-    var ticks = el._ticksEl;
+  function drawScrubberTicks(media) {
+    var ticks = media._ticksEl;
     if (!ticks) return;
     ticks.textContent = '';
-    if (!el._chapters || !el._chapters.length) return;
-    if (!isFinite(el.duration) || el.duration <= 0) return;
-    var dur = el.duration;
-    el._chapters.forEach(function (ch) {
+    if (!media._chapters || !media._chapters.length) return;
+    if (!isFinite(media.duration) || media.duration <= 0) return;
+    var dur = media.duration;
+    media._chapters.forEach(function (ch) {
       var start = parseFloat(ch.startTime) || 0;
       if (start <= 0 || start >= dur) return; // skip edge ticks
       var i = document.createElement('i');
@@ -1108,34 +1110,34 @@
     });
   }
 
-  function updateTimeDisplay(el) {
-    if (el._timeEl) {
-      el._timeEl.textContent = formatTime(el.currentTime) + ' / ' +
-        (isFinite(el.duration) ? formatTime(el.duration) : '\u221E');
-      el._timeEl.dateTime = timeDatetime(el.currentTime);
+  function updateTimeDisplay(media) {
+    if (media._timeEl) {
+      media._timeEl.textContent = formatTime(media.currentTime) + ' / ' +
+        (isFinite(media.duration) ? formatTime(media.duration) : '\u221E');
+      media._timeEl.dateTime = timeDatetime(media.currentTime);
     }
-    if (el._remainingEl) {
-      var rem = (isFinite(el.duration) ? el.duration : 0) - el.currentTime;
-      el._remainingEl.textContent = (rem > 0 ? '\u2212' : '') + formatTime(Math.abs(rem)) +
+    if (media._remainingEl) {
+      var rem = (isFinite(media.duration) ? media.duration : 0) - media.currentTime;
+      media._remainingEl.textContent = (rem > 0 ? '\u2212' : '') + formatTime(Math.abs(rem)) +
         ' ' + settings.labels.remaining;
     }
-    if (el._scrubber) {
-      var dur = isFinite(el.duration) ? el.duration : 0;
-      el._scrubber.max = Math.max(0, Math.floor(dur));
-      el._scrubber.value = String(Math.max(0, Math.min(Math.floor(el.currentTime), el._scrubber.max)));
-      el._scrubber.setAttribute('aria-valuetext',
-        formatTime(el.currentTime) + ' / ' + formatTime(dur));
-      drawScrubberTicks(el);
+    if (media._scrubber) {
+      var dur = isFinite(media.duration) ? media.duration : 0;
+      media._scrubber.max = Math.max(0, Math.floor(dur));
+      media._scrubber.value = String(Math.max(0, Math.min(Math.floor(media.currentTime), media._scrubber.max)));
+      media._scrubber.setAttribute('aria-valuetext',
+        formatTime(media.currentTime) + ' / ' + formatTime(dur));
+      drawScrubberTicks(media);
     }
-    if (el._chapPrevBtn && el._chapters && el._chapters.length) {
-      var ch = chapterIndexAt(el, el.currentTime);
-      el._chapPrevBtn.disabled = ch <= 0;
-      el._chapNextBtn.disabled = ch < 0 || ch >= el._chapters.length - 1;
+    if (media._chapPrevBtn && media._chapters && media._chapters.length) {
+      var ch = chapterIndexAt(media, media.currentTime);
+      media._chapPrevBtn.disabled = ch <= 0;
+      media._chapNextBtn.disabled = ch < 0 || ch >= media._chapters.length - 1;
     }
   }
 
-  function chapterIndexAt(el, t) {
-    var chapters = el._chapters || [];
+  function chapterIndexAt(media, t) {
+    var chapters = media._chapters || [];
     var idx = -1;
     for (var i = 0; i < chapters.length; i++) {
       if (t >= (parseFloat(chapters[i].startTime) || 0)) idx = i;
@@ -1145,7 +1147,7 @@
 
   // ── Mini-player ─────────────────────────────────────────────────────
 
-  function buildMiniPlayer(el, wrap) {
+  function buildMiniPlayer(media, wrap) {
     if (!settings.miniPlayer) return;
     if (!('IntersectionObserver' in window)) return;
     var mini = document.createElement('div');
@@ -1157,12 +1159,12 @@
     var thumb = document.createElement('img');
     thumb.className = 'pp-mini-cover';
     thumb.alt = '';
-    if (el._coverUrl) thumb.src = el._coverUrl;
+    if (media._coverUrl) thumb.src = media._coverUrl;
     mini.appendChild(thumb);
 
     var title = document.createElement('span');
     title.className = 'pp-mini-title';
-    title.textContent = trackTitle(el, playlist.findIndex(function (p) { return p.el === el; }));
+    title.textContent = trackTitle(media, playlist.findIndex(function (p) { return p.media === media; }));
     mini.appendChild(title);
 
     var pb = document.createElement('button');
@@ -1171,7 +1173,7 @@
     pb.setAttribute('aria-label', settings.labels.play);
     pb.appendChild(icon('play'));
     pb.addEventListener('click', function () {
-      if (el.paused) el.play(); else el.pause();
+      if (media.paused) media.play(); else media.pause();
     });
     mini.appendChild(pb);
 
@@ -1184,7 +1186,7 @@
     mini.appendChild(close);
 
     document.body.appendChild(mini);
-    el._miniEl = mini;
+    media._miniEl = mini;
 
     var visible = true;
     var io = new IntersectionObserver(function (entries) {
@@ -1193,18 +1195,18 @@
       syncMini();
     }, { threshold: 0 });
     io.observe(wrap);
-    el.addEventListener('play', syncMini);
-    el.addEventListener('pause', syncMini);
-    el.addEventListener('ended', syncMini);
+    media.addEventListener('play', syncMini);
+    media.addEventListener('pause', syncMini);
+    media.addEventListener('ended', syncMini);
 
     function syncMini() {
-      var playing = !el.paused && !el.ended;
+      var playing = !media.paused && !media.ended;
       if (!visible && playing) {
         mini.hidden = false;
         pb.innerHTML = '';
         pb.appendChild(icon('pause'));
         pb.setAttribute('aria-label', settings.labels.pause);
-        if (el._coverImg && el._coverImg.src) thumb.src = el._coverImg.src;
+        if (media._coverImg && media._coverImg.src) thumb.src = media._coverImg.src;
       } else {
         mini.hidden = true;
       }
@@ -1213,7 +1215,7 @@
 
   // ── Help dialog ─────────────────────────────────────────────────────
 
-  function openHelpDialog(wrap, el, trigger) {
+  function openHelpDialog(wrap, media, trigger) {
     var old = document.getElementById('pp-help-dialog');
     if (old) old.remove();
 
@@ -1307,8 +1309,8 @@
     return ts2m4aPromise;
   }
 
-  function downloadStem(el) {
-    var src = el.dataset.originalSrc || el.getAttribute('src') || '';
+  function downloadStem(media) {
+    var src = media.dataset.originalSrc || media.getAttribute('src') || '';
     return src.split('/').pop().replace(/[?#].*$/, '').replace(/\.m3u8$/i, '');
   }
 
@@ -1725,11 +1727,15 @@
 
   // ── Enhance one <audio> ──────────────────────────────────────────────
 
-  function enhance(el, index) {
+  function enhance(el, index, mediaEl) {
     if (el.dataset.podcastEnhanced) return;
     el.dataset.podcastEnhanced = '1';
 
     if (!el.parentNode) return;
+    // Unified mode: the UI binds to the persistent global audio; the page
+    // element stays as the source descriptor (src/dataset). Non-unified:
+    // media === el (unchanged behaviour).
+    var media = mediaEl || el;
     var wrap = document.createElement('div');
     wrap.className = 'podcast-player';
     wrap.dataset.print = settings.print || 'hide';
@@ -1761,73 +1767,73 @@
     meta.appendChild(sub);
     main.appendChild(meta);
 
-    addCover(el, wrap, main);
+    addCover(media, wrap, main);
 
-    var controls = buildControls(el, wrap, card);
+    var controls = buildControls(media, wrap, card);
     buildDownload(el, wrap, controls);
 
     var panels = document.createElement('div');
     panels.className = 'pp-panels';
     card.appendChild(panels);
-    buildChapters(el, wrap, panels);
-    buildTranscript(el, wrap, panels);
+    buildChapters(media, wrap, panels);
+    buildTranscript(media, wrap, panels);
 
     wrap.appendChild(el);
 
-    el.addEventListener('loadedmetadata', function () {
-      restorePosition(el);
-      updatePositionState(el);
+    media.addEventListener('loadedmetadata', function () {
+      restorePosition(media);
+      updatePositionState(media);
       if (settings.resumeChip && el._resumeChip) {
         var saved = readPosition(el);
         if (isFinite(saved) && saved > 15 && isFinite(el.duration) && saved < el.duration - 30) {
-          el._resumeAt = saved;
-          el._resumeChip.textContent = tpl(settings.labels.resume, { t: formatTime(saved) });
-          el._resumeChip.hidden = false;
+          media._resumeAt = saved;
+          media._resumeChip.textContent = tpl(settings.labels.resume, { t: formatTime(saved) });
+          media._resumeChip.hidden = false;
         }
       }
       try {
         if (sessionStorage.getItem('podcast-autoplay') === '1') {
           sessionStorage.removeItem('podcast-autoplay');
-          var p = el.play();
+          var p = media.play();
           if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
         }
       } catch (_) { /* ignore */ }
     }, { once: true });
-    el.addEventListener('timeupdate', function () {
-      savePosition(el);
-      updatePositionState(el);
-      updateTimeDisplay(el);
+    media.addEventListener('timeupdate', function () {
+      savePosition(media);
+      updatePositionState(media);
+      updateTimeDisplay(media);
     });
-    el.addEventListener('durationchange', function () {
-      updatePositionState(el);
-      updateTimeDisplay(el);
+    media.addEventListener('durationchange', function () {
+      updatePositionState(media);
+      updateTimeDisplay(media);
     });
-    el.addEventListener('ratechange', function () { updatePositionState(el); });
-    el.addEventListener('seeked', function () {
-      updatePositionState(el);
-      updateTimeDisplay(el);
+    media.addEventListener('ratechange', function () { updatePositionState(media); });
+    media.addEventListener('seeked', function () {
+      updatePositionState(media);
+      updateTimeDisplay(media);
     });
-    el.addEventListener('pause', function () {
-      savePosition(el);
+    media.addEventListener('pause', function () {
+      savePosition(media);
       setPlaybackState('paused');
-      syncPlayUI(el, false);
+      syncPlayUI(media, false);
       wrap.classList.remove('pp-active');
-      if (activeAudio === el) activeAudio = null;
+      if (activeAudio === media) activeAudio = null;
     });
-    el.addEventListener('ended', function () {
+    media.addEventListener('ended', function () {
       setPlaybackState('paused');
-      syncPlayUI(el, false);
-      clearPosition(el);
-      if (el._resumeChip) el._resumeChip.hidden = true;
+      syncPlayUI(media, false);
+      clearPosition(media);
+      if (media._resumeChip) media._resumeChip.hidden = true;
     });
 
-    el.addEventListener('play', function () {
-      activeAudio = el;
-      attachHls(el);
-      updateMediaSession(el, index);
+    media.addEventListener('play', function () {
+      activeAudio = media;
+      attachHls(media);
+      updateMediaSession(media, index);
       setPlaybackState('playing');
-      updatePositionState(el);
-      syncPlayUI(el, true);
+      updatePositionState(media);
+      syncPlayUI(media, true);
       wrap.classList.add('pp-active');
       playlist.forEach(function (p) {
         if (p.el !== el) {
@@ -1851,9 +1857,10 @@
       }
     } catch (_) { /* ignore */ }
 
-    setupKeyboard(wrap, el);
-    buildMiniPlayer(el, wrap);
-    attachHls(el);
+    setupKeyboard(wrap, media);
+    if (!settings.unified) buildMiniPlayer(el, wrap);
+    attachHls(media);
+    if (!media.paused) syncPlayUI(media, true);
 
     // Mark enhanced: hide native controls via CSS.
     wrap.dataset.enhanced = '1';
@@ -2204,6 +2211,7 @@
   var gAudio = null;   // the one persistent media element
   var gWrap = null;    // .pp-global container (fixed bottom bar)
   var gLoadedSrc = ''; // source currently loaded in the global player
+  var gLoadedRoute = ''; // docsify route where the current source lives
   var gSurfaces = [];  // live page-surface sync functions (pruned on enhance)
 
   function ensureGlobalPlayer() {
@@ -2324,6 +2332,7 @@
     var src = sourceEl.getAttribute('src') || sourceEl.dataset.originalSrc || '';
     if (!src) return;
     gLoadedSrc = src;
+    gLoadedRoute = window.location.hash || '';
     gAudio.setAttribute('src', src);
     ['title', 'cover', 'chapters', 'download', 'originalSrc'].forEach(function (k) {
       if (sourceEl.dataset[k]) gAudio.dataset[k] = sourceEl.dataset[k];
@@ -2352,6 +2361,26 @@
     syncGlobalBar();
     syncGlobalPlayUI();
     gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
+    // Upgrade the source's page surface into the full player (Phase 2).
+    reEnhance(sourceEl);
+  }
+
+  // Rebuild a page <audio>'s UI according to the global state: full player
+  // when it is the loaded source, compact surface otherwise.
+  function reEnhance(el) {
+    if (!el || !el.parentNode) return;
+    var host = el._ppHost || el.parentNode;
+    if (el._ppSurface) { el._ppSurface.remove(); el._ppSurface = null; }
+    var oldWrap = el.closest('.podcast-player');
+    if (oldWrap) oldWrap.remove();
+    el.dataset.podcastEnhanced = '';
+    if (!el.isConnected && host) host.insertBefore(el, host.firstChild);
+    if (settings.unified) {
+      if (globalIsCurrent(el)) enhance(el, 0, gAudio);
+      else unifiedEnhance(el, 0);
+    } else {
+      enhance(el, 0);
+    }
   }
 
   function globalIsCurrent(el) {
@@ -2364,12 +2393,14 @@
     el.dataset.podcastEnhanced = '1';
     if (!el.parentNode) return;
     ensureGlobalPlayer();
+    el._ppHost = el.parentNode;
 
     var wrap = document.createElement('div');
     wrap.className = 'podcast-player pp-surface';
     wrap.setAttribute('role', 'group');
     wrap.setAttribute('aria-label', trackTitle(el, index) || 'Podcast player');
     el.parentNode.insertBefore(wrap, el);
+    el._ppSurface = wrap;
 
     var main = document.createElement('div');
     main.className = 'pp-surface-main';
@@ -2399,9 +2430,19 @@
     var switchBtn = document.createElement('button');
     switchBtn.type = 'button';
     switchBtn.className = 'podcast-player-btn pp-btn pp-switch';
-    switchBtn.textContent = settings.labels.play;
+    switchBtn.textContent = settings.labels.switchEp;
+    switchBtn.setAttribute('aria-label', settings.labels.switchEp);
     switchBtn.addEventListener('click', function () { play.click(); });
     banner.appendChild(switchBtn);
+    var goBtn = document.createElement('button');
+    goBtn.type = 'button';
+    goBtn.className = 'podcast-player-btn pp-btn pp-goto';
+    goBtn.textContent = settings.labels.goToPage;
+    goBtn.setAttribute('aria-label', settings.labels.goToPage);
+    goBtn.addEventListener('click', function () {
+      if (gLoadedRoute) window.location.hash = gLoadedRoute;
+    });
+    banner.appendChild(goBtn);
     wrap.appendChild(banner);
 
     var controls = document.createElement('div');
