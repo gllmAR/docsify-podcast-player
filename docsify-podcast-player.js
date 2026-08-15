@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.5.0';
+  var PLUGIN_VERSION = '1.5.1';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -119,6 +119,9 @@
       loading: 'Chargement\u2026',
       chapters: 'Chapitres', transcript: 'Transcript',
       transcriptFollow: 'Suivre la lecture', transcriptSearch: 'Filtrer le transcript',
+      refollow: 'Reprendre le suivi',
+      followSuspended: 'Suivi de la lecture suspendu',
+      followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
       resume: 'Reprendre à {t}',
       miniPlayer: 'Mini-lecteur', closeMini: 'Fermer le mini-lecteur',
@@ -142,6 +145,9 @@
       loading: 'Loading\u2026',
       chapters: 'Chapters', transcript: 'Transcript',
       transcriptFollow: 'Follow playback', transcriptSearch: 'Filter transcript',
+      refollow: 'Resume following',
+      followSuspended: 'Playback following suspended',
+      followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
       resume: 'Resume at {t}',
       miniPlayer: 'Mini player', closeMini: 'Close mini player',
@@ -599,6 +605,7 @@
 
     function renderCues(panel, cues, filter) {
       var frag = document.createDocumentFragment();
+      panel._lastCueIdx = -1;
       cues.forEach(function (cue) {
         if (filter && cue.text.toLowerCase().indexOf(filter) === -1) return;
         var p = document.createElement('p');
@@ -641,16 +648,49 @@
     function updateFollow(cues, t) {
       if (!follow || !panel.dataset.loaded) return;
       var idx = activeCueIndex(cues, t);
+      // Match cues by start time so highlighting stays correct when the
+      // list is filtered by the search box.
+      var activeStart = idx >= 0 ? cues[idx].start : -1;
+      var activeEl = null;
       var ps = panel.querySelectorAll('p');
-      ps.forEach(function (p, k) {
-        var active = k === idx;
-        if (active) p.setAttribute('aria-current', 'true');
-        else p.removeAttribute('aria-current');
-        if (active && settings.transcriptFollow) {
-          try { p.scrollIntoView({ block: 'nearest' }); } catch (_) { /* jsdom */ }
+      ps.forEach(function (p) {
+        var active = parseFloat(p.dataset.cueStart) === activeStart;
+        if (active) {
+          p.setAttribute('aria-current', 'true');
+          activeEl = p;
+        } else {
+          p.removeAttribute('aria-current');
         }
       });
+      // Auto-scroll only when the active cue changes AND the user has not
+      // taken over with manual scrolling.
+      if (activeEl && !scrolling && idx !== panel._lastCueIdx) {
+        panel._lastCueIdx = idx;
+        try { activeEl.scrollIntoView({ block: 'nearest' }); } catch (_) { /* jsdom */ }
+      }
     }
+
+    function suspendFollow() {
+      if (!follow || scrolling) return;
+      scrolling = true;
+      var rf = panels.querySelector('.pp-refollow');
+      if (rf) rf.hidden = false;
+      announce(wrap, settings.labels.followSuspended);
+    }
+
+    function resumeFollow() {
+      scrolling = false;
+      panel._lastCueIdx = -1;
+      var rf = panels.querySelector('.pp-refollow');
+      if (rf) rf.hidden = true;
+      announce(wrap, settings.labels.followResumed);
+    }
+
+    var scrolling = false;
+
+    // User takes over with the wheel / touch → suspend auto-scroll.
+    panel.addEventListener('wheel', function () { suspendFollow(); }, { passive: true });
+    panel.addEventListener('touchmove', function () { suspendFollow(); }, { passive: true });
 
     var loadFn = function () {
       if (transcriptCache[tUrl]) {
@@ -700,6 +740,7 @@
       search.placeholder = settings.labels.transcriptSearch;
       search.addEventListener('input', function () {
         panel.textContent = '';
+        panel._lastCueIdx = -1; // follow keeps working on the filtered list
         var q = search.value.trim().toLowerCase();
         if (transcriptCache[tUrl]) renderCues(panel, transcriptCache[tUrl], q);
       });
@@ -715,8 +756,20 @@
       fb.addEventListener('click', function () {
         follow = !follow;
         fb.setAttribute('aria-pressed', String(follow));
+        if (follow) resumeFollow();
       });
       header.appendChild(fb);
+
+      // Floating "resume following" button — appears when the user scrolls
+      // the transcript manually (auto-scroll suspended).
+      var rf = document.createElement('button');
+      rf.type = 'button';
+      rf.className = 'podcast-player-btn pp-refollow';
+      rf.hidden = true;
+      rf.textContent = settings.labels.refollow;
+      rf.setAttribute('aria-label', settings.labels.refollow);
+      rf.addEventListener('click', function () { resumeFollow(); });
+      panels.appendChild(rf);
     }
 
     panels.appendChild(header);
@@ -1938,9 +1991,13 @@
       '}',
       '.podcast-player-transcript-btn:hover { border-color: var(--pp-accent); }',
       '.podcast-player-transcript {',
-      '  max-height: 18em; overflow: auto; border: 1px solid var(--pp-border);',
+      '  position: relative; max-height: 18em; overflow: auto; border: 1px solid var(--pp-border);',
       '  border-radius: 8px; padding: .5em .8em; font-size: .92em; line-height: 1.55;',
       '}',
+      '.pp-refollow { position: sticky; bottom: .4em; float: right; margin: 0 0 -.4em;',
+      '  background: var(--pp-accent); color: var(--pp-accent-contrast);',
+      '  border-color: var(--pp-accent); font-size: .85em; }',
+      '.pp-refollow[hidden] { display: none; }',
       '.podcast-player-transcript p { margin: .2em 0; padding: .1em .3em; border-radius: 6px; }',
       '.podcast-player-transcript p[aria-current="true"] {',
       '  background: var(--pp-accent); color: var(--pp-accent-contrast);',

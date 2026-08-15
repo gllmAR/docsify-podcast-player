@@ -906,3 +906,110 @@ test('v2: speed is persisted per episode', () => {
   speed.click();
   assert.equal(w.sessionStorage.getItem('podcast-speed:ep.m3u8'), '1.25');
 });
+
+// ── v2: good VTT follow mode ─────────────────────────────────────────
+
+function openTranscript(w) {
+  const btn = w.document.querySelector('.podcast-player-transcript-btn');
+  btn.click();
+}
+
+test('v2: follow scrolls only when the active cue changes', async () => {
+  const w = boot(PAGE_HTML);
+  openTranscript(w);
+  await new Promise((r) => setTimeout(r, 20));
+  const audio = w.document.querySelector('audio');
+  let calls = 0;
+  w.Element.prototype.scrollIntoView = function () {
+    if (this.closest && this.closest('.podcast-player-transcript')) calls++;
+  };
+  let t = 1; // cue 0 (1 s)
+  Object.defineProperty(audio, 'currentTime', { get: () => t, set: (v) => { t = v; }, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.equal(calls, 1, 'scrolled on entering cue 0');
+  t = 1.5; // still cue 0
+  fire(audio, 'timeupdate');
+  assert.equal(calls, 1, 'no scroll while in the same cue');
+  t = 6; // cue 1 (5 s)
+  fire(audio, 'timeupdate');
+  assert.equal(calls, 2, 'scrolled on entering cue 1');
+});
+
+test('v2: manual wheel scroll suspends follow; refollow button resumes', async () => {
+  const w = boot(PAGE_HTML);
+  openTranscript(w);
+  await new Promise((r) => setTimeout(r, 20));
+  const audio = w.document.querySelector('audio');
+  const panel = w.document.querySelector('.podcast-player-transcript');
+  const rf = w.document.querySelector('.pp-refollow');
+  assert.ok(rf, 'refollow button present');
+  assert.equal(rf.hidden, true, 'hidden while following');
+  let calls = 0;
+  w.Element.prototype.scrollIntoView = function () {
+    if (this.closest && this.closest('.podcast-player-transcript')) calls++;
+  };
+  let t = 1;
+  Object.defineProperty(audio, 'currentTime', { get: () => t, set: (v) => { t = v; }, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.equal(calls, 1);
+  // User takes over with the wheel.
+  panel.dispatchEvent(new w.Event('wheel'));
+  assert.equal(rf.hidden, false, 'refollow button appears');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(w.document.querySelector('.pp-live').textContent, /suspendu/);
+  t = 6; // cue change, but suspended
+  fire(audio, 'timeupdate');
+  assert.equal(calls, 1, 'no auto-scroll while suspended');
+  // Resume via the floating button.
+  rf.click();
+  assert.equal(rf.hidden, true);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(w.document.querySelector('.pp-live').textContent, /repris/);
+  fire(audio, 'timeupdate'); // next tick re-follows → scroll to cue 1
+  assert.equal(calls, 2, 'scrolls to the current cue on resume');
+});
+
+test('v2: follow toggle off stops auto-scroll entirely', async () => {
+  const w = boot(PAGE_HTML);
+  openTranscript(w);
+  await new Promise((r) => setTimeout(r, 20));
+  const fb = w.document.querySelector('.pp-follow');
+  fb.click(); // follow off
+  assert.equal(fb.getAttribute('aria-pressed'), 'false');
+  const audio = w.document.querySelector('audio');
+  let calls = 0;
+  w.Element.prototype.scrollIntoView = function () {
+    if (this.closest && this.closest('.podcast-player-transcript')) calls++;
+  };
+  let t = 1;
+  Object.defineProperty(audio, 'currentTime', { get: () => t, set: (v) => { t = v; }, configurable: true });
+  fire(audio, 'timeupdate');
+  t = 6;
+  fire(audio, 'timeupdate');
+  assert.equal(calls, 0, 'no scrolling when follow is off');
+  // Re-enable → resumes and announces.
+  fb.click();
+  assert.equal(fb.getAttribute('aria-pressed'), 'true');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(w.document.querySelector('.pp-live').textContent, /repris/);
+});
+
+test('v2: active cue highlight stays correct in a filtered (search) list', async () => {
+  const w = boot(PAGE_HTML);
+  openTranscript(w);
+  await new Promise((r) => setTimeout(r, 20));
+  const search = w.document.querySelector('.pp-transcript-search');
+  search.value = 'Deuxième'; // only cue 1 matches
+  fire(search, 'input');
+  const audio = w.document.querySelector('audio');
+  let t = 1;
+  Object.defineProperty(audio, 'currentTime', { get: () => t, set: (v) => { t = v; }, configurable: true });
+  fire(audio, 'timeupdate');
+  // Cue 1 is the only visible one; at t=1 it is NOT active.
+  const ps = w.document.querySelectorAll('.podcast-player-transcript p');
+  assert.equal(ps.length, 1);
+  assert.equal(ps[0].hasAttribute('aria-current'), false);
+  t = 6; // now inside cue 1 → highlighted
+  fire(audio, 'timeupdate');
+  assert.equal(ps[0].getAttribute('aria-current'), 'true');
+});
