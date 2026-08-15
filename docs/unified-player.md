@@ -31,14 +31,14 @@ Un **lecteur global unique** (pattern Spotify/Apple Music Web) :
 - Toutes les fonctions existantes restent : chapitres, transcript,
   téléchargement, reprise, MediaSession, raccourcis, a11y.
 
-## 3. Décisions à trancher (recommandation entre parenthèses)
+## 3. Décisions (validées 2026-08)
 
-| # | Décision | Options |
+| # | Décision | Choix validé |
 |---|---|---|
-| D1 | **Comportement à la navigation pendant la lecture** | **(a)** Continuer l'épisode courant ; la nouvelle page affiche « En lecture : A » + un lecteur B prêt à basculer (recommandé, Spotify-like). (b) Basculer automatiquement sur l'épisode de la page (comportement actuel mais sans arrêt). (c) Mettre en pause à la navigation. |
-| D2 | **UI persistante** | **(a)** Barre compacte en bas (cover + titre + play + progress) toujours visible pendant la lecture + lecteur plein dans la page de l'épisode joué (recommandé). (b) Lecteur plein persistant en bas (plus lourd). (c) Rien de fixe : le lecteur plein « suit » dans le contenu. |
-| D3 | **Portée** | **(a)** Mode `unified: true` dans docsify-podcast-player (opt-in, site sn l'active ; rétrocompat totale) — recommandé. (b) Refonte site-only (hook site qui déplace l'audio) — fragile, pas réutilisable. |
-| D4 | **Source de vérité** | Le lecteur global possède l'audio ; les surfaces de page (un `<audio>` par épisode) deviennent des **descripteurs** (titre, cover, chapitres, transcript, download) liés au global. Un clic « play » sur une surface = « charger cet épisode dans le global puis jouer ». |
+| D1 | **Comportement à la navigation pendant la lecture** | ✅ **(a)** Continuer l'épisode courant ; la nouvelle page affiche « En lecture : A » + un lecteur B prêt à basculer (Spotify-like). |
+| D2 | **UI persistante** | ✅ **(a)** Barre compacte en bas (cover + titre + play + progress) toujours visible pendant la lecture + lecteur plein dans la page de l'épisode joué. |
+| D3 | **Portée** | ✅ **(a)** Mode `unified: true` dans docsify-podcast-player (opt-in, site sn l'active ; rétrocompat totale). |
+| D4 | **Source de vérité** | ✅ Le lecteur global possède l'audio ; les surfaces de page sont des descripteurs liés au global ; play = charger + jouer. |
 
 ## 4. Architecture cible
 
