@@ -12,7 +12,11 @@ browser — so the repo never has to store the m4a.
   `<track>` and media links resolve against the current markdown page instead of
   `index.html`.
 - **HLS playback** — `.m3u8` sources play natively on Safari, via
-  [hls.js](https://github.com/video-dev/hls.js) (lazy-loaded from CDN) elsewhere.
+  [hls.js](https://github.com/video-dev/hls.js) (lazy-loaded from CDN) elsewhere;
+  one automatic retry with backoff on fatal errors, then a labelled error box.
+- **Resume** — playback position is saved to `localStorage` on every
+  `timeupdate` (survives tab close); a "Reprendre à …" chip appears on return
+  (15 s < position < 30 s from the end), cleared when the episode ends.
 - **Download (TS → M4A)** — a download button links to the real
   `…/{stem}.m4a` URL. The site's [service worker](#download--service-worker)
   synthesizes the file from the HLS segments at fetch time; without a SW the
@@ -24,7 +28,8 @@ browser — so the repo never has to store the m4a.
 - **Chapters** — a `<name>.json` file next to the audio (or `data-chapters="…"`)
   renders a clickable chapter list that seeks the player.
 - **Transcript** — the WebVTT subtitles track becomes a toggleable, clickable
-  transcript (each cue seeks the player).
+  transcript (each cue seeks the player); speaker labels (`<v …>` tags) are
+  styled separately, the active cue is highlighted and auto-scrolled.
 - **Playlist** — previous / next track buttons when a page contains 2+ players,
   auto-advance on track end, only one player plays at a time.
 

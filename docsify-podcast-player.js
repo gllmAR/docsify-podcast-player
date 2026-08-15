@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.4.0';
+  var PLUGIN_VERSION = '1.5.0';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -282,7 +282,11 @@
     showHlsLoading(wrap);
     loadHlsJs().then(function (Hls) {
       el._hlsLoading = false;
-      if (!Hls.isSupported()) { hideHlsLoading(wrap); el.dataset.hlsAttached = '1'; return; }
+      if (!Hls.isSupported()) {
+        hideHlsLoading(wrap);
+        showHlsError(wrap, el, original);
+        return;
+      }
       var hls = new Hls();
       hls.loadSource(original);
       hls.attachMedia(el);
@@ -290,13 +294,22 @@
       el.dataset.hlsAttached = '1';
       hls.on(Hls.Events.MANIFEST_PARSED, function () { hideHlsLoading(wrap); });
       hls.on(Hls.Events.ERROR, function (_evt, data) {
-        if (data.fatal) {
-          hideHlsLoading(wrap);
-          el._hls.destroy();
+        if (!data.fatal) return;
+        hideHlsLoading(wrap);
+        // One automatic retry with backoff, then a final error.
+        var retries = el._hlsFatalRetries || 0;
+        if (retries < 1) {
+          el._hlsFatalRetries = retries + 1;
+          try { el._hls.destroy(); } catch (_) { /* ignore */ }
           el._hls = null;
           el.dataset.hlsAttached = '';
-          showHlsError(wrap, el, original);
+          setTimeout(function () { attachHls(el); }, 2000);
+          return;
         }
+        try { el._hls.destroy(); } catch (_) { /* ignore */ }
+        el._hls = null;
+        el.dataset.hlsAttached = '';
+        showHlsError(wrap, el, original);
       });
     }).catch(function () {
       el._hlsLoading = false;
@@ -446,6 +459,15 @@
           else btn.removeAttribute('aria-current');
         }
       });
+      // Keep the active chapter in view, but only when it changes (never
+      // fight the user's own scrolling).
+      if (idx !== list._lastActiveIdx) {
+        list._lastActiveIdx = idx;
+        var target = items[idx];
+        if (target) {
+          try { target.scrollIntoView({ block: 'nearest' }); } catch (_) { /* jsdom */ }
+        }
+      }
       return idx;
     }
 
@@ -591,8 +613,17 @@
           el.play();
         });
         p.appendChild(t);
-        // speaker label if present: "<v Hôte>…" → keep in text
-        p.appendChild(document.createTextNode(' ' + cue.text));
+        // Speaker label if present: "<v Hôte>…</v>" → styled element.
+        var voice = /^<v\s+([^>]*)>(.*)<\/v>\s*$/i.exec(cue.text);
+        if (voice) {
+          var sp = document.createElement('span');
+          sp.className = 'pp-cue-speaker';
+          sp.textContent = (voice[1] || '').trim();
+          p.appendChild(sp);
+          p.appendChild(document.createTextNode(' ' + (voice[2] || '').trim()));
+        } else {
+          p.appendChild(document.createTextNode(' ' + cue.text));
+        }
         frag.appendChild(p);
       });
       panel.appendChild(frag);
@@ -846,6 +877,25 @@
       else if (e.key === 'End') { e.preventDefault(); el.currentTime = el.duration || 0; }
     });
     scrubWrap.appendChild(scrub);
+
+    // ── Scrubber tooltip (pointer-fine only, decorative) ──
+    var tip = document.createElement('span');
+    tip.className = 'pp-tooltip';
+    tip.setAttribute('aria-hidden', 'true');
+    scrubWrap.appendChild(tip);
+    scrub.addEventListener('pointermove', function (e) {
+      if (!pointerFine()) return;
+      var r = scrub.getBoundingClientRect();
+      var pct = r.width ? (e.clientX - r.left) / r.width : 0;
+      pct = Math.max(0, Math.min(1, pct));
+      tip.textContent = formatTime((isFinite(el.duration) ? el.duration : 0) * pct);
+      tip.style.left = (pct * 100).toFixed(1) + '%';
+    });
+    scrub.addEventListener('pointerleave', function () {
+      if (!pointerFine()) return;
+      tip.style.left = '-9999px';
+    });
+
     controls.appendChild(scrubWrap);
 
     // ── Speed ──
@@ -864,7 +914,7 @@
           if (Math.abs(opts[i] - cur) < 0.001) { next = opts[(i + 1) % opts.length]; break; }
         }
         el.playbackRate = next;
-        try { sessionStorage.setItem('podcast-speed', String(next)); } catch (_) { /* ignore */ }
+        try { sessionStorage.setItem(speedKey(el), String(next)); } catch (_) { /* ignore */ }
         speed.textContent = next + '\u00D7';
         speed.setAttribute('aria-label', tpl(settings.labels.speed, { x: next }));
         announce(wrap, tpl(settings.labels.speedChanged, { x: next }));
@@ -979,6 +1029,13 @@
 
   function wrapFor(el) {
     return el.closest('.podcast-player') || document.body;
+  }
+
+  // Decorative hover interactions only on precise-pointer devices.
+  function pointerFine() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+    } catch (_) { return false; }
   }
 
   function drawScrubberTicks(el) {
@@ -1573,24 +1630,43 @@
 
   // ── Position persistence ────────────────────────────────────────────
 
+  function speedKey(el) {
+    var src = el.dataset.originalSrc || el.getAttribute('src') || '';
+    return 'podcast-speed:' + src;
+  }
+
   function positionKey(el) {
     var src = el.dataset.originalSrc || el.getAttribute('src') || '';
     return 'podcast-pos:' + src;
   }
 
+  // Position survives across visits (localStorage); sessionStorage is a
+  // legacy fallback for saves from older releases.
+  function readPosition(el) {
+    var key = positionKey(el);
+    var v = null;
+    try { v = localStorage.getItem(key); } catch (_) { /* ignore */ }
+    if (v === null || v === '') {
+      try { v = sessionStorage.getItem(key); } catch (_) { /* ignore */ }
+    }
+    var t = parseFloat(v);
+    return isFinite(t) && t > 0 ? t : NaN;
+  }
+
+  function clearPosition(el) {
+    var key = positionKey(el);
+    try { localStorage.removeItem(key); } catch (_) { /* ignore */ }
+    try { sessionStorage.removeItem(key); } catch (_) { /* ignore */ }
+  }
+
   function savePosition(el) {
     if (!el.duration || el.seeking) return;
-    try { sessionStorage.setItem(positionKey(el), String(el.currentTime)); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(positionKey(el), String(el.currentTime)); } catch (_) { /* ignore */ }
   }
 
   function restorePosition(el) {
-    try {
-      var saved = sessionStorage.getItem(positionKey(el));
-      if (saved) {
-        var t = parseFloat(saved);
-        if (t > 0 && isFinite(t)) el.currentTime = t;
-      }
-    } catch (_) { /* ignore */ }
+    var t = readPosition(el);
+    if (isFinite(t)) el.currentTime = t;
   }
 
   // ── Enhance one <audio> ──────────────────────────────────────────────
@@ -1648,9 +1724,8 @@
       restorePosition(el);
       updatePositionState(el);
       if (settings.resumeChip && el._resumeChip) {
-        var saved = null;
-        try { saved = parseFloat(sessionStorage.getItem(positionKey(el))); } catch (_) { /* ignore */ }
-        if (saved && saved > 15 && isFinite(el.duration) && saved < el.duration - 10) {
+        var saved = readPosition(el);
+        if (isFinite(saved) && saved > 15 && isFinite(el.duration) && saved < el.duration - 30) {
           el._resumeAt = saved;
           el._resumeChip.textContent = tpl(settings.labels.resume, { t: formatTime(saved) });
           el._resumeChip.hidden = false;
@@ -1688,6 +1763,8 @@
     el.addEventListener('ended', function () {
       setPlaybackState('paused');
       syncPlayUI(el, false);
+      clearPosition(el);
+      if (el._resumeChip) el._resumeChip.hidden = true;
     });
 
     el.addEventListener('play', function () {
@@ -1707,9 +1784,10 @@
       });
     }, { once: false });
 
-    // Restore persisted speed
+    // Restore persisted speed (per-episode key, legacy global fallback)
     try {
-      var sp = parseFloat(sessionStorage.getItem('podcast-speed'));
+      var sp = parseFloat(sessionStorage.getItem(speedKey(el)) ||
+        sessionStorage.getItem('podcast-speed'));
       if (sp && settings.speedOptions && settings.speedOptions.indexOf(sp) !== -1) {
         el.playbackRate = sp;
         if (el._speedBtn) {
@@ -1823,6 +1901,13 @@
       '  transform: translateY(-50%); pointer-events: none; height: 0; }',
       '.pp-ticks i { position: absolute; top: 0; width: 2px; height: 14px;',
       '  margin-top: -7px; border-radius: 1px; background: var(--pp-tick); }',
+      '.pp-tooltip { position: absolute; top: -1.9em; transform: translateX(-50%);',
+      '  background: var(--pp-text); color: var(--pp-bg); font-size: .72em;',
+      '  padding: .2em .55em; border-radius: 4px; pointer-events: none;',
+      '  white-space: nowrap; opacity: 0; transition: opacity .12s; z-index: 2; }',
+      '@media (hover: hover) and (pointer: fine) {',
+      '  .pp-scrubber-wrap:hover .pp-tooltip { opacity: 1; }',
+      '}',
       '.pp-volume { display: inline-flex; align-items: center; gap: .3em; }',
       '.pp-volume-range { width: 70px; accent-color: var(--pp-accent); }',
       '.pp-speed { min-width: 3em; }',
@@ -1865,6 +1950,7 @@
       '  color: var(--pp-accent); cursor: pointer;',
       '  font-variant-numeric: tabular-nums; font-weight: 600;',
       '}',
+      '.pp-cue-speaker { font-weight: 700; color: var(--pp-text); }',
       '.podcast-player-transcript p[aria-current="true"] .podcast-player-cue {',
       '  color: var(--pp-accent-contrast);',
       '}',

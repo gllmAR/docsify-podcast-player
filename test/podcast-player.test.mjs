@@ -20,7 +20,7 @@ const PAGE_HTML = `<!doctype html><html><head></head><body>
 
 function boot(html, opts) {
   opts = opts || {};
-  const { overrides, mediaSession, mediaMetadata, serviceWorker, swProbe, localStorage: seedStorage } = opts;
+  const { overrides, mediaSession, mediaMetadata, serviceWorker, swProbe, hls, localStorage: seedStorage } = opts;
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
@@ -45,7 +45,8 @@ function boot(html, opts) {
     Object.defineProperty(window.navigator, 'serviceWorker',
       { value: serviceWorker, configurable: true });
   }
-  // No real HLS engine in jsdom: leave window.Hls undefined.
+  // No real HLS engine in jsdom: window.Hls is undefined unless the test opts in.
+  if (hls) window.Hls = hls;
   window.fetch = async (u) => {
     if (String(u).endsWith('sw.js')) {
       // SW auto-detect probe (HEAD): ok only when the test opts in.
@@ -63,7 +64,7 @@ function boot(html, opts) {
     }
     if (String(u).endsWith('.vtt')) {
       return { ok: true, text: async () => (
-        'WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nBonjour le monde\n\n' +
+        'WEBVTT\n\n00:00:01.000 --> 00:00:04.000\n<v Hôte>Bonjour le monde</v>\n\n' +
         '00:00:05.000 --> 00:00:08.000\nDeuxième ligne du transcript'
       ) };
     }
@@ -810,4 +811,98 @@ test('v2: registers at most once per page even with several players', async () =
   const w = boot(html, { serviceWorker: sw, swProbe: 'ok' });
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(sw.registered.length, 1, 'one registration per page');
+});
+
+// ── v2 improvements: cross-visit resume, HLS errors, tooltip, speakers ─
+
+test('v2: position persists to localStorage and is cleared on ended', async () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  Object.defineProperty(audio, 'currentTime', { value: 120, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.equal(w.localStorage.getItem('podcast-pos:ep.m3u8'), '120',
+    'position saved to localStorage');
+  fire(audio, 'ended');
+  assert.equal(w.localStorage.getItem('podcast-pos:ep.m3u8'), null,
+    'position purged on ended');
+});
+
+test('v2: resume chip reads localStorage (cross-visit) and hides near the end', async () => {
+  const html = `<!doctype html><html><head></head><body>
+    <div class="markdown-section">
+      <audio controls preload="none" src="ep.m3u8"></audio>
+    </div>
+  </body></html>`;
+  // Cross-visit resume: seed localStorage before boot.
+  const w = boot(html, { localStorage: { 'podcast-pos:ep.m3u8': '120' } });
+  const audio = w.document.querySelector('audio');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  fire(audio, 'loadedmetadata');
+  await new Promise((r) => setTimeout(r, 10));
+  const chip = w.document.querySelector('.pp-resume');
+  assert.equal(chip.hidden, false, 'chip shown from localStorage');
+  assert.match(chip.textContent, /Reprendre à 2:00/);
+
+  // Near the end (< 30 s margin) → no chip.
+  const w2 = boot(html, { localStorage: { 'podcast-pos:ep.m3u8': '580' } });
+  Object.defineProperty(w2.document.querySelector('audio'), 'duration', { value: 600, configurable: true });
+  fire(w2.document.querySelector('audio'), 'loadedmetadata');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(w2.document.querySelector('.pp-resume').hidden, true,
+    'no chip within the last 30 s');
+});
+
+test('v2: HLS unsupported shows an error instead of silent playback', async () => {
+  const w = boot(PAGE_HTML, { hls: { isSupported: () => false } });
+  await new Promise((r) => setTimeout(r, 20));
+  const err = w.document.querySelector('.podcast-player-error');
+  assert.ok(err, 'error box present when hls.js is unavailable');
+  assert.equal(err.getAttribute('role'), 'alert');
+});
+
+test('v2: HLS fatal error retries once with backoff, then shows the error', async () => {
+  const instances = [];
+  class FakeHls {
+    constructor() { this.callbacks = {}; this.destroyed = false; instances.push(this); }
+    loadSource() {}
+    attachMedia() {}
+    on(evt, cb) { this.callbacks[evt] = cb; }
+    destroy() { this.destroyed = true; }
+  }
+  FakeHls.isSupported = () => true;
+  FakeHls.Events = { MANIFEST_PARSED: 'mp', ERROR: 'err' };
+  const w = boot(PAGE_HTML, { hls: FakeHls });
+  const audio = w.document.querySelector('audio');
+  fire(audio, 'play');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(instances.length, 1, 'first hls instance attached');
+  instances[0].callbacks.err('err', { fatal: true });
+  assert.equal(instances[0].destroyed, true, 'first instance destroyed');
+  // Backoff retry: a second instance attaches after 2 s.
+  await new Promise((r) => setTimeout(r, 2200));
+  assert.equal(instances.length, 2, 'retry attaches a second instance');
+  instances[1].callbacks.err('err', { fatal: true });
+  await new Promise((r) => setTimeout(r, 20));
+  const err = w.document.querySelector('.podcast-player-error');
+  assert.ok(err, 'final error shown after retry');
+});
+
+test('v2: speaker labels from <v> tags are styled separately', async () => {
+  const w = boot(PAGE_HTML);
+  const btn = w.document.querySelector('.podcast-player-transcript-btn');
+  btn.click();
+  await new Promise((r) => setTimeout(r, 20));
+  const speaker = w.document.querySelector('.pp-cue-speaker');
+  assert.ok(speaker, 'speaker element present');
+  assert.equal(speaker.textContent, 'Hôte');
+  const p = speaker.closest('p');
+  assert.match(p.textContent, /Bonjour le monde/);
+});
+
+test('v2: speed is persisted per episode', () => {
+  const w = boot(PAGE_HTML);
+  const speed = w.document.querySelector('.pp-speed');
+  speed.click();
+  assert.equal(w.sessionStorage.getItem('podcast-speed:ep.m3u8'), '1.25');
 });
