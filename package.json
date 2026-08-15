@@ -1,7 +1,7 @@
 {
   "name": "docsify-podcast-player",
-  "version": "1.2.6",
-  "description": "Audio / podcast player plugin for Docsify (HLS, cover art, chapters, VTT transcript, TS\u2192M4A download).",
+  "version": "1.3.0",
+  "description": "Audio / podcast player plugin for Docsify (HLS, cover art, chapters, VTT transcript, TS→M4A download). Accessible, responsive v2 controls.",
   "keywords": [
     "docsify",
     "docsify-plugin",

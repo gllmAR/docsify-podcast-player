@@ -471,3 +471,184 @@ test('click falls back when the download URL is outside the SW scope (remote-rep
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(remuxed, true, 'main-thread remux ran');
 });
+
+// ── v2: custom controls, accessibility, responsive ────────────────────
+
+test('v2: custom play button toggles icon + aria-label with playback state', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const play = w.document.querySelector('.pp-btn-play');
+  assert.ok(play, 'custom play button present');
+  assert.equal(play.getAttribute('aria-label'), 'Écouter');
+  fire(audio, 'play');
+  assert.equal(play.getAttribute('aria-label'), 'Pause');
+  fire(audio, 'pause');
+  assert.equal(play.getAttribute('aria-label'), 'Écouter');
+});
+
+test('v2: Space on a focused button does not double-toggle playback', () => {
+  const w = boot(PAGE_HTML);
+  const wrap = w.document.querySelector('.podcast-player');
+  const back = w.document.querySelector('.pp-btn-back');
+  const audio = w.document.querySelector('audio');
+  let played = 0, paused = 0;
+  audio.play = () => { played++; };
+  audio.pause = () => { paused++; };
+  back.focus();
+  const ev = new w.KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+  wrap.dispatchEvent(ev);
+  assert.equal(played + paused, 0, 'space on a button must not toggle playback');
+  // Space on the wrap itself still toggles
+  wrap.focus();
+  const ev2 = new w.KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+  wrap.dispatchEvent(ev2);
+  assert.equal(played, 1, 'space on the wrap toggles play');
+});
+
+test('v2: back/forward buttons seek by the configured amount', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  let t = 50;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  w.document.querySelector('.pp-btn-forward').click();
+  assert.equal(t, 60);
+  w.document.querySelector('.pp-btn-back').click();
+  assert.equal(t, 50);
+});
+
+test('v2: scrubber reflects time and carries aria-valuetext', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const scrub = w.document.querySelector('.pp-scrubber');
+  assert.ok(scrub, 'scrubber present');
+  assert.equal(scrub.type, 'range');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  Object.defineProperty(audio, 'currentTime', { value: 42, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.equal(scrub.max, '600');
+  assert.equal(scrub.value, '42');
+  assert.match(scrub.getAttribute('aria-valuetext'), /0:42 \/ 10:00/);
+  assert.match(w.document.querySelector('.pp-time').textContent, /0:42 \/ 10:00/);
+});
+
+test('v2: speed button cycles options and announces', async () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const speed = w.document.querySelector('.pp-speed');
+  assert.ok(speed, 'speed button present');
+  audio.playbackRate = 1;
+  speed.click();
+  assert.equal(audio.playbackRate, 1.25);
+  assert.equal(speed.textContent, '1.25×');
+  const live = w.document.querySelector('.pp-live');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(live.textContent, /Vitesse/);
+});
+
+test('v2: mute button toggles aria-pressed and icon', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const mute = w.document.querySelector('.pp-mute');
+  assert.ok(mute, 'mute button present');
+  audio.muted = false;
+  mute.click();
+  assert.equal(audio.muted, true);
+  assert.equal(mute.getAttribute('aria-pressed'), 'true');
+  mute.click();
+  assert.equal(audio.muted, false);
+  assert.equal(mute.getAttribute('aria-pressed'), 'false');
+});
+
+test('v2: chapter prev/next buttons jump between chapters', () => {
+  const w = boot(PAGE_HTML);
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const audio = w.document.querySelector('audio');
+      const prev = w.document.querySelector('.pp-btn-chap-prev');
+      const next = w.document.querySelector('.pp-btn-chap-next');
+      assert.ok(prev && next, 'chapter nav buttons present');
+      let t = 35; // inside chapter 2 (starts at 30)
+      Object.defineProperty(audio, 'currentTime', {
+        get: () => t, set: (v) => { t = v; }, configurable: true,
+      });
+      audio.play = () => {};
+      fire(audio, 'timeupdate');
+      next.disabled = true; // last chapter
+      prev.click();
+      assert.equal(t, 30, 'prev jumps to current chapter start');
+      resolve();
+    }, 20);
+  });
+});
+
+test('v2: transcript toggle uses aria-expanded + aria-controls', async () => {
+  const w = boot(PAGE_HTML);
+  const btn = w.document.querySelector('.podcast-player-transcript-btn');
+  assert.ok(btn.getAttribute('aria-controls'), 'aria-controls present');
+  assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  btn.click();
+  assert.equal(btn.getAttribute('aria-expanded'), 'true');
+  const panel = w.document.querySelector('.podcast-player-transcript');
+  assert.equal(panel.hidden, false);
+});
+
+test('v2: resume chip appears when a saved position exists', async () => {
+  const html = `<!doctype html><html><head></head><body>
+    <div class="markdown-section">
+      <audio controls preload="none" src="ep.m3u8"></audio>
+    </div>
+  </body></html>`;
+  const w = boot(html);
+  const audio = w.document.querySelector('audio');
+  w.sessionStorage.setItem('podcast-pos:ep.m3u8', '120');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  fire(audio, 'loadedmetadata');
+  await new Promise((r) => setTimeout(r, 10));
+  const chip = w.document.querySelector('.pp-resume');
+  assert.ok(chip, 'resume chip present');
+  assert.equal(chip.hidden, false);
+  assert.match(chip.textContent, /Reprendre à 2:00/);
+});
+
+test('v2: help dialog opens on ? button, Esc closes and restores focus', async () => {
+  const w = boot(PAGE_HTML);
+  const help = w.document.querySelector('.pp-help');
+  help.click();
+  await new Promise((r) => setTimeout(r, 10));
+  const dlg = w.document.getElementById('pp-help-dialog');
+  assert.ok(dlg, 'help dialog present');
+  assert.equal(dlg.getAttribute('role'), 'dialog');
+  const esc = new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  dlg.dispatchEvent(esc);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(w.document.getElementById('pp-help-dialog'), null, 'dialog closed');
+  assert.equal(w.document.activeElement, help, 'focus restored to the help button');
+});
+
+test('v2: native audio controls are visually hidden once enhanced', () => {
+  const w = boot(PAGE_HTML);
+  const wrap = w.document.querySelector('.podcast-player');
+  assert.equal(wrap.dataset.enhanced, '1');
+  const css = [...w.document.querySelectorAll('style')]
+    .map((s) => s.textContent).join('\n');
+  assert.match(css, /data-enhanced="1"\] audio/, 'CSS hides native audio');
+  assert.match(css, /prefers-reduced-motion/, 'reduced-motion rule present');
+  assert.match(css, /forced-colors/, 'forced-colors rule present');
+  assert.match(css, /@media print/, 'print rule present');
+  assert.match(css, /--pp-accent/, 'design tokens present');
+});
+
+test('v2: download failure announces via role=alert and live region', async () => {
+  const w = boot(PAGE_HTML);
+  w.ts2m4a = { tsToM4a: async () => { throw new Error('boom'); } };
+  const a = w.document.querySelector('.podcast-player-download');
+  a.click();
+  await new Promise((r) => setTimeout(r, 30));
+  const alert = w.document.querySelector('.podcast-player-error-msg[role="alert"]');
+  assert.ok(alert, 'role=alert error element present');
+  const live = w.document.querySelector('.pp-live');
+  assert.match(live.textContent, /Téléchargement indisponible/);
+});
