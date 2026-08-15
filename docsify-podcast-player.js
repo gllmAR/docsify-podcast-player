@@ -36,7 +36,6 @@
  *     showSpeed:        true,
  *     showVolume:       true,
  *     showChapterNav:   true,
- *     miniPlayer:       false,
  *     transcriptFollow: true,
  *     transcriptSearch: true,
  *     helpDialog:       true,
@@ -55,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.4';
+  var PLUGIN_VERSION = '1.6.5';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -94,7 +93,6 @@
     showChapterNav: true,
     backForward: 10,                  // back/forward buttons (seconds)
     speedOptions: [0.75, 1, 1.25, 1.5, 2],
-    miniPlayer: false,
     transcriptFollow: true,
     transcriptSearch: true,
     helpDialog: true,
@@ -130,7 +128,7 @@
       followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
       resume: 'Reprendre à {t}',
-      miniPlayer: 'Mini-lecteur', closeMini: 'Fermer le mini-lecteur',
+      global: 'Lecteur',
       help: 'Raccourcis clavier', closeHelp: 'Fermer',
       error: 'Erreur', retry: 'Réessayer',
       nowPlaying: 'En lecture', title: 'Épisode',
@@ -158,7 +156,7 @@
       followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
       resume: 'Resume at {t}',
-      miniPlayer: 'Mini player', closeMini: 'Close mini player',
+      global: 'Player',
       help: 'Keyboard shortcuts', closeHelp: 'Close',
       error: 'Error', retry: 'Retry',
       nowPlaying: 'Now playing', title: 'Episode',
@@ -1152,72 +1150,6 @@
 
   // ── Mini-player ─────────────────────────────────────────────────────
 
-  function buildMiniPlayer(media, wrap) {
-    if (!settings.miniPlayer) return;
-    if (!('IntersectionObserver' in window)) return;
-    var mini = document.createElement('div');
-    mini.className = 'pp-mini';
-    mini.setAttribute('role', 'region');
-    mini.setAttribute('aria-label', settings.labels.miniPlayer);
-    mini.hidden = true;
-
-    var thumb = document.createElement('img');
-    thumb.className = 'pp-mini-cover';
-    thumb.alt = '';
-    if (media._coverUrl) thumb.src = media._coverUrl;
-    mini.appendChild(thumb);
-
-    var title = document.createElement('span');
-    title.className = 'pp-mini-title';
-    title.textContent = trackTitle(media, playlist.findIndex(function (p) { return p.media === media; }));
-    mini.appendChild(title);
-
-    var pb = document.createElement('button');
-    pb.type = 'button';
-    pb.className = 'podcast-player-btn pp-btn pp-mini-play';
-    pb.setAttribute('aria-label', settings.labels.play);
-    pb.appendChild(icon('play'));
-    pb.addEventListener('click', function () {
-      if (media.paused) media.play(); else media.pause();
-    });
-    mini.appendChild(pb);
-
-    var close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'podcast-player-btn pp-btn pp-mini-close';
-    close.setAttribute('aria-label', settings.labels.closeMini);
-    close.appendChild(icon('close'));
-    close.addEventListener('click', function () { mini.hidden = true; });
-    mini.appendChild(close);
-
-    document.body.appendChild(mini);
-    media._miniEl = mini;
-
-    var visible = true;
-    var io = new IntersectionObserver(function (entries) {
-      var e = entries[0];
-      visible = e.isIntersecting;
-      syncMini();
-    }, { threshold: 0 });
-    io.observe(wrap);
-    bindMedia(media, 'play', syncMini);
-    bindMedia(media, 'pause', syncMini);
-    bindMedia(media, 'ended', syncMini);
-
-    function syncMini() {
-      var playing = !media.paused && !media.ended;
-      if (!visible && playing) {
-        mini.hidden = false;
-        pb.innerHTML = '';
-        pb.appendChild(icon('pause'));
-        pb.setAttribute('aria-label', settings.labels.pause);
-        if (media._coverImg && media._coverImg.src) thumb.src = media._coverImg.src;
-      } else {
-        mini.hidden = true;
-      }
-    }
-  }
-
   // ── Help dialog ─────────────────────────────────────────────────────
 
   function openHelpDialog(wrap, media, trigger) {
@@ -1864,7 +1796,6 @@
     } catch (_) { /* ignore */ }
 
     setupKeyboard(wrap, media);
-    if (!settings.unified) buildMiniPlayer(el, wrap);
     attachHls(media);
     if (!media.paused) syncPlayUI(media, true);
 
@@ -2054,17 +1985,6 @@
       '  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }',
       '.podcast-player { position: relative; }',
       '@keyframes pp-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }',
-      // ── Mini player ──
-      '.pp-mini {',
-      '  position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999;',
-      '  display: flex; align-items: center; gap: .7em; padding: .5em 1em;',
-      '  padding-bottom: calc(.5em + env(safe-area-inset-bottom));',
-      '  background: var(--pp-bg); color: var(--pp-text);',
-      '  border-top: 1px solid var(--pp-border); box-shadow: 0 -2px 12px rgb(0 0 0 / .15);',
-      '}',
-      '.pp-mini-cover { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; }',
-      '.pp-mini-title { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;',
-      '  white-space: nowrap; font-size: .9em; }',
       // ── Help dialog ──
       '.pp-help-overlay {',
       '  position: fixed; inset: 0; z-index: 10000; display: flex;',
@@ -2245,7 +2165,7 @@
     gWrap = document.createElement('div');
     gWrap.className = 'pp-global';
     gWrap.setAttribute('role', 'region');
-    gWrap.setAttribute('aria-label', settings.labels.miniPlayer || 'Lecteur');
+    gWrap.setAttribute('aria-label', settings.labels.global || 'Lecteur');
     gAudio = document.createElement('audio');
     gAudio.className = 'pp-global-audio';
     gWrap.appendChild(gAudio);
@@ -2499,61 +2419,41 @@
   // Load an episode straight from the catalog (no page navigation).
   function globalLoadEntry(entry) {
     if (!entry || !entry.audioUrl) return;
-    gLoadedSrc = pathOf(entry.audioUrl);
-    gLoadedRoute = '';
+    var route = '';
     if (entry.pageUrl && gFeed && gFeed.series && gFeed.series.baseUrl) {
       var base = gFeed.series.baseUrl.replace(/\/$/, '');
       if (entry.pageUrl.indexOf(base) === 0) {
-        gLoadedRoute = '#/' + entry.pageUrl.slice(base.length).replace(/^\//, '');
+        route = '#/' + entry.pageUrl.slice(base.length).replace(/^\//, '');
       }
     }
-    gAudio.setAttribute('src', entry.audioUrl);
-    ['title', 'cover', 'chapters', 'download', 'originalSrc'].forEach(function (k) {
-      delete gAudio.dataset[k];
+    var data = {};
+    if (entry.title) data.title = entry.title;
+    if (entry.chaptersUrl) data.chapters = entry.chaptersUrl;
+    if (entry.transcriptUrl) data.transcript = entry.transcriptUrl;
+    if (entry.downloadUrl) data.download = entry.downloadUrl;
+    adoptGlobalSource({
+      src: entry.audioUrl,
+      route: route,
+      data: data,
+      coverUrl: entry.coverUrl || '',
     });
-    if (entry.title) gAudio.dataset.title = entry.title;
-    if (entry.coverUrl) gAudio._coverUrl = entry.coverUrl;
-    if (entry.chaptersUrl) gAudio.dataset.chapters = entry.chaptersUrl;
-    if (entry.transcriptUrl) gAudio.dataset.transcript = entry.transcriptUrl;
-    if (entry.downloadUrl) gAudio.dataset.download = entry.downloadUrl;
-    if (gAudio._hls) { try { gAudio._hls.destroy(); } catch (_) { /* ignore */ } }
-    gAudio._hls = null;
-    gAudio.dataset.hlsAttached = '';
-    gAudio._hlsFatalRetries = 0;
-    gAudio._chapters = null;
-    try {
-      var sp = parseFloat(sessionStorage.getItem(speedKey(gAudio)) ||
-        sessionStorage.getItem('podcast-speed'));
-      if (sp && settings.speedOptions && settings.speedOptions.indexOf(sp) !== -1) {
-        gAudio.playbackRate = sp;
-      }
-    } catch (_) { /* ignore */ }
-    attachHls(gAudio);
-    updateMediaSession(gAudio, -1);
-    gWrap.hidden = false;
-    document.body.classList.add('pp-has-global');
-    syncGlobalBar();
-    syncGlobalPlayUI();
-    gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
   }
 
   // Load an episode (a page <audio> element) into the global player.
-  function globalLoad(sourceEl) {
+  // Adopt a source descriptor into the persistent global player: media
+  // src, dataset, cover, HLS reset, rate restore, UI sync. Returns true
+  // when a source was adopted.
+  function adoptGlobalSource(desc) {
     ensureGlobalPlayer();
-    var src = sourceEl.getAttribute('src') || sourceEl.dataset.originalSrc || '';
-    if (!src) return;
-    gLoadedSrc = src;
-    gLoadedRoute = window.location.hash || '';
-    gAudio.setAttribute('src', src);
+    if (!desc || !desc.src) return false;
+    gLoadedSrc = pathOf(desc.src);
+    gLoadedRoute = desc.route || '';
+    gAudio.setAttribute('src', desc.src);
     ['title', 'cover', 'chapters', 'download', 'originalSrc'].forEach(function (k) {
-      if (sourceEl.dataset[k]) gAudio.dataset[k] = sourceEl.dataset[k];
+      if (desc.data && desc.data[k]) gAudio.dataset[k] = desc.data[k];
       else delete gAudio.dataset[k];
     });
-    if (sourceEl._coverUrl) gAudio._coverUrl = sourceEl._coverUrl;
-    else {
-      var stem = audioStem(sourceEl);
-      if (stem) gAudio._coverUrl = resolve(settings.coverPattern.replace('{stem}', stem));
-    }
+    gAudio._coverUrl = desc.coverUrl || '';
     if (gAudio._hls) { try { gAudio._hls.destroy(); } catch (_) { /* ignore */ } }
     gAudio._hls = null;
     gAudio.dataset.hlsAttached = '';
@@ -2573,8 +2473,29 @@
     syncGlobalBar();
     syncGlobalPlayUI();
     gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
-    // Upgrade the source's page surface into the full player (Phase 2).
-    reEnhance(sourceEl);
+    return true;
+  }
+
+  function globalLoad(sourceEl) {
+    var src = sourceEl.getAttribute('src') || sourceEl.dataset.originalSrc || '';
+    var data = {};
+    ['title', 'cover', 'chapters', 'download', 'originalSrc'].forEach(function (k) {
+      if (sourceEl.dataset[k]) data[k] = sourceEl.dataset[k];
+    });
+    var coverUrl = sourceEl._coverUrl;
+    if (!coverUrl) {
+      var stem = audioStem(sourceEl);
+      if (stem) coverUrl = resolve(settings.coverPattern.replace('{stem}', stem));
+    }
+    if (adoptGlobalSource({
+      src: src,
+      route: window.location.hash || '',
+      data: data,
+      coverUrl: coverUrl,
+    })) {
+      // Upgrade the source's page surface into the full player (Phase 2).
+      reEnhance(sourceEl);
+    }
   }
 
   // Rebuild a page <audio>'s UI according to the global state: full player
@@ -2797,7 +2718,6 @@
       backForward: user.backForward !== undefined ? user.backForward
         : (DEFAULTS.backForward || DEFAULTS.seekSeconds),
       speedOptions: user.speedOptions || DEFAULTS.speedOptions,
-      miniPlayer: user.miniPlayer !== undefined ? user.miniPlayer : DEFAULTS.miniPlayer,
       transcriptFollow: user.transcriptFollow !== undefined ? user.transcriptFollow : DEFAULTS.transcriptFollow,
       transcriptSearch: user.transcriptSearch !== undefined ? user.transcriptSearch : DEFAULTS.transcriptSearch,
       helpDialog: user.helpDialog !== undefined ? user.helpDialog : DEFAULTS.helpDialog,
