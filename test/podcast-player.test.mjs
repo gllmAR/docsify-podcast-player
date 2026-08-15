@@ -1013,3 +1013,91 @@ test('v2: active cue highlight stays correct in a filtered (search) list', async
   fire(audio, 'timeupdate');
   assert.equal(ps[0].getAttribute('aria-current'), 'true');
 });
+
+// ── v2: unified player (persistent playback) ─────────────────────────
+
+const UNIFIED_HTML = `<!doctype html><html><head></head><body>
+  <div class="markdown-section">
+    <audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>
+  </div>
+</body></html>`;
+
+function bootUnified(html, opts) {
+  return boot(html || UNIFIED_HTML, Object.assign(
+    { overrides: { podcastPlayer: { unified: true } } }, opts || {}));
+}
+
+test('unified: one persistent global player in body, surfaces on the page', () => {
+  const w = bootUnified();
+  const globals = w.document.querySelectorAll('body > .pp-global');
+  assert.equal(globals.length, 1, 'single .pp-global container');
+  assert.equal(globals[0].querySelectorAll('audio').length, 1, 'one global audio');
+  const surface = w.document.querySelector('.pp-surface');
+  assert.ok(surface, 'page audio becomes a surface');
+  assert.ok(!w.document.querySelector('.pp-controls'), 'no full control bar in the page');
+  assert.ok(globals[0].querySelector('.pp-global-bar'), 'global bar present');
+});
+
+test('unified: surface play loads the episode into the global player', async () => {
+  const w = bootUnified();
+  const play = w.document.querySelector('.pp-surface .pp-btn-play');
+  play.click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  assert.ok(gAudio.getAttribute('src'), 'global audio has a src');
+  assert.equal(gAudio.dataset.title, 'Épisode 1', 'descriptor copied');
+  assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
+  const gTitle = w.document.querySelector('.pp-global-title');
+  assert.equal(gTitle.textContent, 'Épisode 1');
+  // Play event → pause UI on both the bar and the surface.
+  fire(gAudio, 'play');
+  assert.equal(w.document.querySelector('.pp-global-play').getAttribute('aria-label'), 'Pause');
+  assert.equal(play.getAttribute('aria-label'), 'Pause');
+});
+
+test('unified: navigation keeps playing; new episode page shows a banner and switches', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  const srcA = gAudio.getAttribute('src');
+  assert.ok(srcA, 'episode A loaded');
+
+  // Simulate docsify navigation to episode B's page.
+  const section = w.document.querySelector('.markdown-section');
+  section.innerHTML = '<audio controls preload="none" src="ep2.m3u8" data-title="Épisode 2"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+
+  assert.equal(gAudio.getAttribute('src'), srcA, 'playback source untouched by navigation');
+  const banner = w.document.querySelector('.pp-now-playing');
+  assert.equal(banner.hidden, false, 'now-playing banner shown');
+  assert.equal(banner.querySelector('.pp-now-playing-title').textContent, 'Épisode 1');
+  // Surface of B: play switches the global source.
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(gAudio.getAttribute('src').indexOf('ep2.m3u8') !== -1, 'switched to episode B');
+  assert.equal(w.document.querySelector('.pp-now-playing').hidden, true, 'banner gone after switch');
+});
+
+test('unified: resume chip loads the saved position into the global player', async () => {
+  const w = bootUnified(UNIFIED_HTML, { localStorage: { 'podcast-pos:ep.m3u8': '120' } });
+  const chip = w.document.querySelector('.pp-surface .pp-resume');
+  assert.ok(chip, 'resume chip on the surface');
+  assert.equal(chip.hidden, false);
+  assert.match(chip.textContent, /Reprendre à 2:00/);
+  chip.click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  assert.ok(gAudio.getAttribute('src'), 'episode loaded by the chip');
+});
+
+test('unified: same-source play toggles pause instead of reloading', async () => {
+  const w = bootUnified();
+  const play = w.document.querySelector('.pp-surface .pp-btn-play');
+  play.click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  const src = gAudio.getAttribute('src');
+  play.click(); // toggle → pause
+  assert.equal(gAudio.getAttribute('src'), src, 'source not reloaded on toggle');
+});

@@ -33,6 +33,21 @@ browser — so the repo never has to store the m4a.
 - **Playlist** — previous / next track buttons when a page contains 2+ players,
   auto-advance on track end, only one player plays at a time.
 
+## Unified player (persistent playback)
+
+Set `podcastPlayer: { unified: true }` to turn the plugin into a **global
+player** that survives docsify navigation:
+
+- A single persistent `<audio>` lives in a fixed bottom bar (`.pp-global`),
+  never destroyed by page swaps — playback **continues when you change
+  pages**.
+- Page `<audio>` elements become compact **surfaces** (cover, title, play,
+  download, resume chip); play loads the episode into the global player.
+- While another episode is playing, pages show a **« En lecture : X »**
+  banner with a one-click switch.
+- Resume (localStorage), speed, HLS retry and MediaSession all apply to the
+  global player. Non-unified mode is unchanged (`unified: false`).
+
 ## Usage
 
 ```html

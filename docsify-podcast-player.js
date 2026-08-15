@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.5.1';
+  var PLUGIN_VERSION = '1.6.0';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -102,6 +102,7 @@
     print: 'hide',                    // 'hide' | 'keep-title'
     downloadSw: true,                 // true=auto-detect 'sw.js' at site
                                      // root, false=off, string=explicit path
+    unified: false,                   // persistent global player (see docs/unified-player.md)
     labels: null,                     // FR by default, EN fallback
   };
 
@@ -2068,6 +2069,43 @@
       '.pp-help td { padding: .25em .5em; border-bottom: 1px solid var(--pp-border); }',
       '.pp-help td:first-child { font-weight: 600; white-space: nowrap; }',
       '.pp-help-close { margin-top: .8em; }',
+      // ── Unified player (global bar + surfaces) ──
+      '.pp-global { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9000;',
+      '  padding: .5em .8em calc(.5em + env(safe-area-inset-bottom));',
+      '  background: var(--pp-bg); border-top: 1px solid var(--pp-border);',
+      '  box-shadow: 0 -2px 12px rgb(0 0 0 / .08); }',
+      '.pp-global[hidden] { display: none; }',
+      '.pp-global-bar { display: flex; align-items: center; gap: .6em;',
+      '  max-width: 1100px; margin: 0 auto; }',
+      '.pp-global-cover { width: 44px; height: 44px; object-fit: cover;',
+      '  border-radius: 6px; flex: 0 0 auto; background: var(--pp-bg-alt); }',
+      '.pp-global-meta { min-width: 0; flex: 0 1 24%; display: flex;',
+      '  flex-direction: column; line-height: 1.25; }',
+      '.pp-global-title { font-weight: 600; font-size: .88em;',
+      '  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
+      '.pp-global-now { font-size: .75em; color: var(--pp-text-muted);',
+      '  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
+      '.pp-global-scrubber { flex: 1 1 auto; min-width: 60px;',
+      '  accent-color: var(--pp-accent); }',
+      '.pp-global-time { font-size: .78em; font-variant-numeric: tabular-nums;',
+      '  color: var(--pp-text-muted); white-space: nowrap; }',
+      '.pp-surface { padding: .8em; border: 1px solid var(--pp-border);',
+      '  border-radius: var(--pp-radius); background: var(--pp-bg);',
+      '  color: var(--pp-text); }',
+      '.pp-surface-main { display: flex; gap: .9em; align-items: center; }',
+      '.pp-surface .podcast-player-cover { width: 56px; height: 56px; }',
+      '.pp-surface .pp-title { font-size: .98em; margin: 0; }',
+      '.pp-surface-controls { display: flex; align-items: center; gap: .5em;',
+      '  margin-top: .6em; }',
+      '.pp-now-playing { display: flex; align-items: center; gap: .5em;',
+      '  margin-top: .6em; font-size: .85em; color: var(--pp-text-muted); }',
+      '.pp-now-playing[hidden] { display: none; }',
+      '.pp-now-playing .pp-switch { font-size: .85em; }',
+      '@media (max-width: 559px) {',
+      '  .pp-global-cover { width: 38px; height: 38px; }',
+      '  .pp-global-meta { flex-basis: 40%; }',
+      '  .pp-global-time { display: none; }',
+      '}',
       // ── Reduced motion ──
       '@media (prefers-reduced-motion: reduce) {',
       '  .podcast-player-loading { animation: none; }',
@@ -2157,6 +2195,284 @@
     }
   }
 
+  // ── Unified player (persistent playback across navigation) ──────────
+  // `unified: true` — a single persistent audio element lives in a fixed
+  // bottom bar (never destroyed by docsify's page swaps). Page <audio>
+  // elements become lightweight surfaces that load their episode into the
+  // global player on play. Navigation no longer stops playback.
+
+  var gAudio = null;   // the one persistent media element
+  var gWrap = null;    // .pp-global container (fixed bottom bar)
+  var gLoadedSrc = ''; // source currently loaded in the global player
+  var gSurfaces = [];  // live page-surface sync functions (pruned on enhance)
+
+  function ensureGlobalPlayer() {
+    if (gAudio) return;
+    gWrap = document.createElement('div');
+    gWrap.className = 'pp-global';
+    gWrap.setAttribute('role', 'region');
+    gWrap.setAttribute('aria-label', settings.labels.miniPlayer || 'Lecteur');
+    gAudio = document.createElement('audio');
+    gAudio.className = 'pp-global-audio';
+    gWrap.appendChild(gAudio);
+
+    var bar = document.createElement('div');
+    bar.className = 'pp-global-bar';
+    var cover = document.createElement('img');
+    cover.className = 'pp-global-cover';
+    cover.alt = '';
+    bar.appendChild(cover);
+    var meta = document.createElement('div');
+    meta.className = 'pp-global-meta';
+    var title = document.createElement('span');
+    title.className = 'pp-global-title';
+    meta.appendChild(title);
+    var now = document.createElement('span');
+    now.className = 'pp-global-now';
+    meta.appendChild(now);
+    bar.appendChild(meta);
+    var scrub = document.createElement('input');
+    scrub.type = 'range';
+    scrub.className = 'pp-global-scrubber';
+    scrub.min = 0; scrub.max = 0; scrub.step = 1; scrub.value = 0;
+    scrub.setAttribute('aria-label', settings.labels.position);
+    bar.appendChild(scrub);
+    var time = document.createElement('span');
+    time.className = 'pp-global-time';
+    time.setAttribute('aria-live', 'off');
+    bar.appendChild(time);
+    var play = document.createElement('button');
+    play.type = 'button';
+    play.className = 'podcast-player-btn pp-btn pp-global-play';
+    play.setAttribute('aria-label', settings.labels.play);
+    play.appendChild(icon('play'));
+    bar.appendChild(play);
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'podcast-player-btn pp-btn pp-global-close';
+    close.setAttribute('aria-label', settings.labels.closeMini);
+    close.appendChild(icon('close'));
+    bar.appendChild(close);
+
+    play.addEventListener('click', function () {
+      if (gAudio.paused) { var p = gAudio.play(); if (p && p.catch) p.catch(function () {}); }
+      else gAudio.pause();
+    });
+    close.addEventListener('click', function () {
+      gAudio.pause();
+      gWrap.hidden = true;
+    });
+    scrub.addEventListener('input', function () {
+      gAudio.currentTime = parseFloat(scrub.value) || 0;
+      syncGlobalBar();
+    });
+
+    gAudio.addEventListener('play', function () { syncGlobalPlayUI(true); });
+    gAudio.addEventListener('pause', function () { syncGlobalPlayUI(false); });
+    gAudio.addEventListener('ended', function () {
+      clearPosition(gAudio);
+      syncGlobalPlayUI(false);
+    });
+    gAudio.addEventListener('loadedmetadata', function () {
+      restorePosition(gAudio);
+      syncGlobalBar();
+    });
+    gAudio.addEventListener('timeupdate', function () {
+      savePosition(gAudio);
+      syncGlobalBar();
+    });
+    gAudio.addEventListener('durationchange', syncGlobalBar);
+    gAudio.addEventListener('ratechange', function () { updatePositionState(gAudio); });
+
+    gWrap.appendChild(bar);
+    gWrap.hidden = true;
+    document.body.appendChild(gWrap);
+  }
+
+  function syncGlobalBar() {
+    if (!gBarReady()) return;
+    var bar = gWrap.querySelector('.pp-global-bar');
+    bar.querySelector('.pp-global-title').textContent = trackTitle(gAudio, -1);
+    bar.querySelector('.pp-global-time').textContent =
+      formatTime(gAudio.currentTime) + ' / ' +
+      (isFinite(gAudio.duration) ? formatTime(gAudio.duration) : '\u221E');
+    if (gAudio._coverUrl) {
+      var img = bar.querySelector('.pp-global-cover');
+      if (img.getAttribute('src') !== gAudio._coverUrl) img.src = gAudio._coverUrl;
+    }
+    var scrub = bar.querySelector('.pp-global-scrubber');
+    scrub.max = String(Math.max(0, Math.floor(isFinite(gAudio.duration) ? gAudio.duration : 0)));
+    scrub.value = String(Math.max(0, Math.min(Math.floor(gAudio.currentTime), scrub.max)));
+  }
+
+  function gBarReady() {
+    return !!(gWrap && gWrap.querySelector('.pp-global-bar'));
+  }
+
+  function syncGlobalPlayUI(playing) {
+    if (!gBarReady()) return;
+    if (playing === undefined) playing = !gAudio.paused && !gAudio.ended;
+    var play = gWrap.querySelector('.pp-global-play');
+    play.innerHTML = '';
+    play.appendChild(icon(playing ? 'pause' : 'play'));
+    play.setAttribute('aria-label', playing ? settings.labels.pause : settings.labels.play);
+  }
+
+  // Load an episode (a page <audio> element) into the global player.
+  function globalLoad(sourceEl) {
+    ensureGlobalPlayer();
+    var src = sourceEl.getAttribute('src') || sourceEl.dataset.originalSrc || '';
+    if (!src) return;
+    gLoadedSrc = src;
+    gAudio.setAttribute('src', src);
+    ['title', 'cover', 'chapters', 'download', 'originalSrc'].forEach(function (k) {
+      if (sourceEl.dataset[k]) gAudio.dataset[k] = sourceEl.dataset[k];
+      else delete gAudio.dataset[k];
+    });
+    if (sourceEl._coverUrl) gAudio._coverUrl = sourceEl._coverUrl;
+    else {
+      var stem = audioStem(sourceEl);
+      if (stem) gAudio._coverUrl = resolve(settings.coverPattern.replace('{stem}', stem));
+    }
+    if (gAudio._hls) { try { gAudio._hls.destroy(); } catch (_) { /* ignore */ } }
+    gAudio._hls = null;
+    gAudio.dataset.hlsAttached = '';
+    gAudio._hlsFatalRetries = 0;
+    gAudio._chapters = null;
+    try {
+      var sp = parseFloat(sessionStorage.getItem(speedKey(gAudio)) ||
+        sessionStorage.getItem('podcast-speed'));
+      if (sp && settings.speedOptions && settings.speedOptions.indexOf(sp) !== -1) {
+        gAudio.playbackRate = sp;
+      }
+    } catch (_) { /* ignore */ }
+    attachHls(gAudio);
+    updateMediaSession(gAudio, -1);
+    gWrap.hidden = false;
+    syncGlobalBar();
+    syncGlobalPlayUI();
+    gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
+  }
+
+  function globalIsCurrent(el) {
+    return gLoadedSrc === (el.getAttribute('src') || el.dataset.originalSrc || '');
+  }
+
+  // Page surfaces in unified mode.
+  function unifiedEnhance(el, index) {
+    if (el.dataset.podcastEnhanced) return;
+    el.dataset.podcastEnhanced = '1';
+    if (!el.parentNode) return;
+    ensureGlobalPlayer();
+
+    var wrap = document.createElement('div');
+    wrap.className = 'podcast-player pp-surface';
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', trackTitle(el, index) || 'Podcast player');
+    el.parentNode.insertBefore(wrap, el);
+
+    var main = document.createElement('div');
+    main.className = 'pp-surface-main';
+    wrap.appendChild(main);
+    addCover(el, wrap, main);
+
+    var meta = document.createElement('div');
+    meta.className = 'pp-meta';
+    var titleEl = document.createElement('h3');
+    titleEl.className = 'pp-title';
+    titleEl.textContent = trackTitle(el, index) || '';
+    meta.appendChild(titleEl);
+    var sub = document.createElement('div');
+    sub.className = 'pp-sub';
+    sub.textContent = [settings.artist, settings.album].filter(Boolean).join(' \u00B7 ');
+    meta.appendChild(sub);
+    main.appendChild(meta);
+
+    // "Now playing" banner when the global player runs a different episode.
+    var banner = document.createElement('div');
+    banner.className = 'pp-now-playing';
+    banner.hidden = true;
+    banner.appendChild(document.createTextNode(settings.labels.nowPlaying + ' : '));
+    var bTitle = document.createElement('b');
+    bTitle.className = 'pp-now-playing-title';
+    banner.appendChild(bTitle);
+    var switchBtn = document.createElement('button');
+    switchBtn.type = 'button';
+    switchBtn.className = 'podcast-player-btn pp-btn pp-switch';
+    switchBtn.textContent = settings.labels.play;
+    switchBtn.addEventListener('click', function () { play.click(); });
+    banner.appendChild(switchBtn);
+    wrap.appendChild(banner);
+
+    var controls = document.createElement('div');
+    controls.className = 'pp-surface-controls';
+    wrap.appendChild(controls);
+
+    var play = document.createElement('button');
+    play.type = 'button';
+    play.className = 'podcast-player-btn pp-btn pp-btn-play';
+    play.setAttribute('aria-label', settings.labels.play);
+    play.appendChild(icon('play'));
+    play.addEventListener('click', function () {
+      var src = el.getAttribute('src') || el.dataset.originalSrc || '';
+      if (!src) return;
+      if (globalIsCurrent(el)) {
+        if (gAudio.paused) { var p = gAudio.play(); if (p && p.catch) p.catch(function () {}); }
+        else gAudio.pause();
+      } else {
+        globalLoad(el);
+        var p2 = gAudio.play();
+        if (p2 && p2.catch) p2.catch(function () { /* autoplay blocked */ });
+      }
+    });
+    controls.appendChild(play);
+
+    // Resume chip (position saved per episode, localStorage).
+    if (settings.resumeChip) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'podcast-player-btn pp-resume';
+      chip.hidden = true;
+      chip.addEventListener('click', function () {
+        globalLoad(el);
+        gAudio.currentTime = el._resumeAt || 0;
+        var p = gAudio.play();
+        if (p && p.catch) p.catch(function () {});
+      });
+      controls.appendChild(chip);
+      var saved = readPosition(el);
+      if (isFinite(saved) && saved > 15) {
+        el._resumeAt = saved;
+        chip.textContent = tpl(settings.labels.resume, { t: formatTime(saved) });
+        chip.hidden = false;
+      }
+    }
+
+    buildDownload(el, wrap, controls);
+
+    function syncSurface(playing) {
+      var mine = globalIsCurrent(el);
+      if (playing === undefined) playing = mine && !gAudio.paused && !gAudio.ended;
+      else playing = playing && mine;
+      play.innerHTML = '';
+      play.appendChild(icon(playing ? 'pause' : 'play'));
+      play.setAttribute('aria-label', playing ? settings.labels.pause : settings.labels.play);
+      banner.hidden = !(gLoadedSrc && !mine);
+      if (!banner.hidden) {
+        bTitle.textContent = gAudio.dataset.title || '';
+      }
+    }
+    gAudio.addEventListener('play', function () { syncSurface(true); });
+    gAudio.addEventListener('pause', function () { syncSurface(false); });
+    gAudio.addEventListener('ended', function () { syncSurface(false); });
+    syncSurface._el = wrap;
+    gSurfaces = gSurfaces.filter(function (s) {
+      return s._el && s._el.isConnected;
+    });
+    gSurfaces.push(syncSurface);
+    syncSurface(false);
+  }
+
   // ── Docsify plugin ──────────────────────────────────────────────────
 
   function plugin(hook) {
@@ -2168,7 +2484,10 @@
       root.querySelectorAll('audio').forEach(function (el) {
         playlist.push({ el: el });
       });
-      playlist.forEach(function (entry, i) { enhance(entry.el, i); });
+      playlist.forEach(function (entry, i) {
+        if (settings.unified) unifiedEnhance(entry.el, i);
+        else enhance(entry.el, i);
+      });
 
       root.querySelectorAll('video').forEach(attachHls);
 
@@ -2224,6 +2543,7 @@
       helpDialog: user.helpDialog !== undefined ? user.helpDialog : DEFAULTS.helpDialog,
       resumeChip: user.resumeChip !== undefined ? user.resumeChip : DEFAULTS.resumeChip,
       downloadSw: user.downloadSw !== undefined ? user.downloadSw : DEFAULTS.downloadSw,
+      unified: user.unified !== undefined ? user.unified : DEFAULTS.unified,
       print: user.print || DEFAULTS.print,
       labels: labels,
     };

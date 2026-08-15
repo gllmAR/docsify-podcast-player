@@ -79,7 +79,10 @@ Contenu de page (remplacé à chaque navigation)
 ### Phase 0 — Design détaillé (ce doc validé + D1..D4 tranchés)
 Livrable : schéma DOM final, contrat de liaison, tests cibles.
 
-### Phase 1 — Noyau global (plugin, `unified: true`)
+### Phase 1 — Noyau global (plugin, `unified: true`) — ✅ livré (1.6.0)
+(barre compacte + surfaces + bascule + tests ; le lecteur plein dans la
+page de l'épisode joué arrive en Phase 2 — les surfaces restent compactes
+jusque-là)
 - Création du conteneur `.pp-global` + `audio#pp-audio` à l'install
   (appendu à `body`, jamais retiré).
 - `buildGlobalPlayer()` : barre compacte + panneau plein (réutilise les
