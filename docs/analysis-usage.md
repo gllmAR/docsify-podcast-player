@@ -83,6 +83,12 @@ player (1.6.5).
    (`&autoplay=1` tente la lecture) ; bouton partage dans la barre qui
    copie le lien horodaté de l'épisode joué.
 
+### Ergonomie — ✅ livré (1.6.7)
+- **Layout v3** (`docs/ui-audit-v3.md`) : deux rangées — progression pleine
+  largeur avec temps aux extrémités, transport groupé (back/play/forward ·
+  nav chapitres · réglages à droite), play dominant 48 px, help déplacé
+  dans le toolbar, download près du titre.
+
 ### P2
 3. **Sleep timer** (G3) — cycle 15/30/60/fin d'épisode, bouton dans la
    barre (menu), annonce live, persistance de session.

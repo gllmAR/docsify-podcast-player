@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.6';
+  var PLUGIN_VERSION = '1.6.7';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -820,6 +820,27 @@
     controls.className = 'pp-controls';
     card.appendChild(controls);
 
+    // v3 layout: a progress row (current time — scrubber — total) above
+    // a transport row with grouped controls (nav · chapters · settings).
+    var progress = document.createElement('div');
+    progress.className = 'pp-progress';
+    controls.appendChild(progress);
+    var transport = document.createElement('div');
+    transport.className = 'pp-transport';
+    controls.appendChild(transport);
+    var navGroup = document.createElement('div');
+    navGroup.className = 'pp-group pp-group-nav';
+    transport.appendChild(navGroup);
+    var chapGroup = document.createElement('div');
+    chapGroup.className = 'pp-group pp-group-chap';
+    transport.appendChild(chapGroup);
+    var spacer = document.createElement('div');
+    spacer.className = 'pp-spacer';
+    transport.appendChild(spacer);
+    var settingsGroup = document.createElement('div');
+    settingsGroup.className = 'pp-group pp-group-settings';
+    transport.appendChild(settingsGroup);
+
     // ── Play / pause ──
     var play = document.createElement('button');
     play.type = 'button';
@@ -830,7 +851,7 @@
     play.addEventListener('click', function () {
       if (media.paused) media.play(); else media.pause();
     });
-    controls.appendChild(play);
+    navGroup.appendChild(play);
 
     // ── Resume chip ──
     if (settings.resumeChip) {
@@ -844,7 +865,7 @@
         chip.hidden = true;
       });
       media._resumeChip = chip;
-      controls.appendChild(chip);
+      navGroup.appendChild(chip);
     }
 
     // ── Back / forward ──
@@ -857,7 +878,7 @@
     back.addEventListener('click', function () {
       media.currentTime = Math.max(0, media.currentTime - backSec);
     });
-    controls.appendChild(back);
+    navGroup.appendChild(back);
 
     var forward = document.createElement('button');
     forward.type = 'button';
@@ -867,7 +888,7 @@
     forward.addEventListener('click', function () {
       media.currentTime = Math.min(media.duration || Infinity, media.currentTime + backSec);
     });
-    controls.appendChild(forward);
+    navGroup.appendChild(forward);
 
     // ── Chapter prev / next ──
     var chapPrev = document.createElement('button');
@@ -877,7 +898,7 @@
     chapPrev.appendChild(icon('chapPrev'));
     chapPrev.disabled = true;
     chapPrev.addEventListener('click', function () { chapterJump(media, -1); });
-    controls.appendChild(chapPrev);
+    chapGroup.appendChild(chapPrev);
 
     var chapNext = document.createElement('button');
     chapNext.type = 'button';
@@ -886,7 +907,7 @@
     chapNext.appendChild(icon('chapNext'));
     chapNext.disabled = true;
     chapNext.addEventListener('click', function () { chapterJump(media, 1); });
-    controls.appendChild(chapNext);
+    chapGroup.appendChild(chapNext);
     media._chapPrevBtn = chapPrev;
     media._chapNextBtn = chapNext;
 
@@ -898,16 +919,24 @@
       time.className = 'podcast-player-time pp-time';
       time.setAttribute('aria-live', 'off');
       time.dateTime = 'PT0S';
-      time.textContent = '0:00 / 0:00';
+      time.textContent = '0:00';
       media._timeEl = time;
       timeWrap.appendChild(time);
+      progress.appendChild(timeWrap);
+      var totalWrap = document.createElement('span');
+      totalWrap.className = 'pp-time-total-wrap';
+      var total = document.createElement('span');
+      total.className = 'pp-time-total';
+      total.setAttribute('aria-live', 'off');
+      total.textContent = '0:00';
+      media._timeTotalEl = total;
+      totalWrap.appendChild(total);
       var remaining = document.createElement('span');
       remaining.className = 'pp-remaining';
       remaining.setAttribute('aria-hidden', 'true');
       remaining.textContent = '0:00';
       media._remainingEl = remaining;
-      timeWrap.appendChild(remaining);
-      controls.appendChild(timeWrap);
+      totalWrap.appendChild(remaining);
     }
 
     // ── Scrubber ──
@@ -959,7 +988,9 @@
       tip.style.left = '-9999px';
     });
 
-    controls.appendChild(scrubWrap);
+    progress.appendChild(scrubWrap);
+    // Total time at the right end of the progress row (after the scrubber).
+    if (settings.showTime !== false) progress.appendChild(totalWrap);
 
     // ── Speed ──
     if (settings.showSpeed) {
@@ -983,7 +1014,7 @@
         announce(wrap, tpl(settings.labels.speedChanged, { x: next }));
         updatePositionState(media);
       });
-      controls.appendChild(speed);
+      settingsGroup.appendChild(speed);
     }
 
     // ── Volume ──
@@ -1026,19 +1057,7 @@
       volWrap.appendChild(vol);
       media._muteBtn = mute;
       media._volRange = vol;
-      controls.appendChild(volWrap);
-    }
-
-    // ── Help ──
-    if (settings.helpDialog) {
-      var help = document.createElement('button');
-      help.type = 'button';
-      help.className = 'podcast-player-btn pp-btn pp-help';
-      help.setAttribute('aria-label', settings.labels.help);
-      help.appendChild(icon('help'));
-      media._helpBtn = help;
-      help.addEventListener('click', function () { openHelpDialog(wrap, media, help); });
-      controls.appendChild(help);
+      settingsGroup.appendChild(volWrap);
     }
 
     return controls;
@@ -1119,9 +1138,12 @@
 
   function updateTimeDisplay(media) {
     if (media._timeEl) {
-      media._timeEl.textContent = formatTime(media.currentTime) + ' / ' +
-        (isFinite(media.duration) ? formatTime(media.duration) : '\u221E');
+      media._timeEl.textContent = formatTime(media.currentTime);
       media._timeEl.dateTime = timeDatetime(media.currentTime);
+    }
+    if (media._timeTotalEl) {
+      media._timeTotalEl.textContent =
+        isFinite(media.duration) ? formatTime(media.duration) : '\u221E';
     }
     if (media._remainingEl) {
       var rem = (isFinite(media.duration) ? media.duration : 0) - media.currentTime;
@@ -1168,7 +1190,7 @@
     overlay.setAttribute('aria-label', settings.labels.help);
 
     var box = document.createElement('div');
-    box.className = 'pp-help';
+    box.className = 'pp-help-box';
 
     var h = document.createElement('h4');
     h.textContent = settings.labels.help;
@@ -1495,7 +1517,7 @@
     }
   }
 
-  function buildToolbar(entry, index) {
+  function buildToolbar(entry, index, media, wrap) {
     var bar = document.createElement('div');
     bar.className = 'podcast-player-toolbar pp-toolbar';
 
@@ -1530,6 +1552,21 @@
       entry.el.addEventListener('ended', function () {
         goTo(index + 1, true);
       });
+    }
+
+    // Help ("?" shortcut) lives in the toolbar, out of the transport bar.
+    if (settings.helpDialog) {
+      var help = document.createElement('button');
+      help.type = 'button';
+      help.className = 'podcast-player-btn pp-btn pp-help';
+      help.setAttribute('aria-label', settings.labels.help);
+      help.title = '?';
+      help.appendChild(icon('help'));
+      help.addEventListener('click', function () {
+        openHelpDialog(wrap, media, help);
+      });
+      media._helpBtn = help;
+      bar.appendChild(help);
     }
 
     return bar;
@@ -1686,7 +1723,7 @@
     wrap.setAttribute('aria-label', trackTitle(el, index) || 'Podcast player');
     el.parentNode.insertBefore(wrap, el);
 
-    var bar = buildToolbar(playlist[index], index);
+    var bar = buildToolbar(playlist[index], index, media, wrap);
     if (bar.childNodes.length) wrap.appendChild(bar);
 
     var card = document.createElement('div');
@@ -1712,7 +1749,8 @@
     addCover(media, wrap, main);
 
     var controls = buildControls(media, wrap, card);
-    buildDownload(el, wrap, controls);
+    // Download sits next to the title (toolbar), not inside the transport.
+    buildDownload(el, wrap, bar);
 
     var panels = document.createElement('div');
     panels.className = 'pp-panels';
@@ -1867,8 +1905,12 @@
       '  position: absolute; width: 1px; height: 1px; overflow: hidden;',
       '  clip: rect(0 0 0 0); white-space: nowrap; clip-path: inset(50%);',
       '}',
-      // ── Controls ──
-      '.pp-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .4em; }',
+      // ── Controls (v3: progress row + transport row) ──
+      '.pp-controls { display: flex; flex-direction: column; gap: .55em; }',
+      '.pp-progress { display: flex; align-items: center; gap: .6em; }',
+      '.pp-transport { display: flex; align-items: center; gap: .75em; flex-wrap: wrap; }',
+      '.pp-group { display: inline-flex; align-items: center; gap: .35em; }',
+      '.pp-spacer { flex: 1 1 auto; min-width: .5em; }',
       '.podcast-player-btn {',
       '  border: 1px solid var(--pp-border); background: var(--pp-bg-alt);',
       '  color: var(--pp-text); border-radius: 8px; cursor: pointer;',
@@ -1885,18 +1927,23 @@
       '.podcast-player-btn:disabled { opacity: .45; cursor: default; }',
       '.pp-icon { display: inline-flex; }',
       '.pp-btn-play { background: var(--pp-accent); color: var(--pp-accent-contrast);',
-      '  border-color: var(--pp-accent); border-radius: 50%; }',
+      '  border-color: var(--pp-accent); border-radius: 50%;',
+      '  min-height: 48px; min-width: 48px; font-size: 1.05em; }',
       '.pp-btn-play:hover { filter: brightness(1.08); }',
       '.podcast-player-time { font-variant-numeric: tabular-nums; font-size: .85em;',
       '  color: var(--pp-text-muted); white-space: nowrap; }',
-      '.pp-time-wrap { position: relative; display: inline-flex; align-items: baseline; }',
+      '.pp-time-wrap { position: relative; display: inline-flex; align-items: baseline;',
+      '  flex: 0 0 auto; }',
+      '.pp-time-total-wrap { display: inline-flex; align-items: baseline; flex: 0 0 auto; }',
+      '.pp-time-total { font-variant-numeric: tabular-nums; font-size: .85em;',
+      '  color: var(--pp-text-muted); white-space: nowrap; }',
       '.pp-remaining { display: none; font-variant-numeric: tabular-nums; font-size: .85em;',
       '  color: var(--pp-text-muted); white-space: nowrap; }',
       '@media (hover: hover) and (pointer: fine) {',
-      '  .pp-time-wrap:hover .podcast-player-time { display: none; }',
-      '  .pp-time-wrap:hover .pp-remaining { display: inline; }',
+      '  .pp-time-total-wrap:hover .pp-time-total { display: none; }',
+      '  .pp-time-total-wrap:hover .pp-remaining { display: inline; }',
       '}',
-      '.pp-scrubber-wrap { position: relative; flex: 1 1 120px; min-width: 90px;',
+      '.pp-scrubber-wrap { position: relative; flex: 1 1 auto; min-width: 90px;',
       '  display: flex; align-items: center; }',
       '.pp-scrubber { flex: 1; width: 100%; min-width: 0; accent-color: var(--pp-accent); }',
       '.pp-ticks { position: absolute; left: 0; right: 0; top: 50%;',
@@ -1977,6 +2024,7 @@
       // ── Toolbar ──
       '.podcast-player-toolbar { display: flex; align-items: center; gap: .5em;',
       '  margin-bottom: .4em; }',
+      '.podcast-player-toolbar .pp-help { margin-left: auto; }',
       '.podcast-player-title { font-size: .85em; color: var(--pp-text-muted);',
       '  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
       // ── Loading / error / live ──
@@ -1995,16 +2043,16 @@
       '  align-items: center; justify-content: center;',
       '  background: rgb(0 0 0 / .45); padding: 1em;',
       '}',
-      '.pp-help {',
+      '.pp-help-box {',
       '  background: var(--pp-bg); color: var(--pp-text);',
       '  border: 1px solid var(--pp-border); border-radius: var(--pp-radius);',
       '  padding: 1.2em; max-width: 30em; width: 100%; max-height: 80vh; overflow: auto;',
       '  box-shadow: var(--pp-shadow);',
       '}',
-      '.pp-help h4 { margin: 0 0 .6em; }',
-      '.pp-help table { border-collapse: collapse; width: 100%; font-size: .92em; }',
-      '.pp-help td { padding: .25em .5em; border-bottom: 1px solid var(--pp-border); }',
-      '.pp-help td:first-child { font-weight: 600; white-space: nowrap; }',
+      '.pp-help-box h4 { margin: 0 0 .6em; }',
+      '.pp-help-box table { border-collapse: collapse; width: 100%; font-size: .92em; }',
+      '.pp-help-box td { padding: .25em .5em; border-bottom: 1px solid var(--pp-border); }',
+      '.pp-help-box td:first-child { font-weight: 600; white-space: nowrap; }',
       '.pp-help-close { margin-top: .8em; }',
       // ── Unified player (global bar + surfaces) ──
       '.pp-global { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9000;',
@@ -2054,7 +2102,7 @@
       // ── Forced colors ──
       '@media (forced-colors: active) {',
       '  .podcast-player-btn, .pp-card, .podcast-player-transcript,',
-      '  .pp-transcript-search, .pp-help { border: 1px solid CanvasText; }',
+      '  .pp-transcript-search, .pp-help-box { border: 1px solid CanvasText; }',
       '  .pp-ticks i { background: CanvasText; }',
       '  .pp-btn-play, .podcast-player-chapters li.active,',
       '  .podcast-player-transcript p[aria-current="true"] {',
@@ -2072,11 +2120,15 @@
       // ── Base tier (<560px) ──
       '@media (max-width: 559px) {',
       '  .podcast-player { --pp-cover: 88px; }',
-      '  .pp-controls { gap: .3em; }',
+      '  .pp-controls { gap: .45em; }',
       '  .podcast-player-btn { min-height: 44px; min-width: 44px; }',
-      '  .pp-scrubber-wrap { flex: 1 1 100%; order: 10; }',
-      '  .pp-time-wrap { order: 9; }',
+      '  .pp-progress { gap: .45em; }',
+      '  .pp-transport { gap: .6em; row-gap: .4em; }',
       '  .pp-volume-range { width: 56px; }',
+      '}',
+      // ── Wide tier (≥900px) ──
+      '@media (min-width: 900px) {',
+      '  .podcast-player { --pp-cover: 150px; }',
       '}',
     ].join('\n');
     var style = document.createElement('style');

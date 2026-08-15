@@ -160,7 +160,7 @@ test('transcript button loads and renders VTT cues', async () => {
   assert.match(paras[1].textContent, /Deuxième ligne/);
 });
 
-test('playlist toolbar appears only with 2+ players', () => {
+test('playlist prev/next appear only with 2+ players; help always in toolbar', () => {
   const two = `<div class="markdown-section">
     <audio src="a.m3u8"></audio>
     <audio src="b.m3u8"></audio>
@@ -168,7 +168,16 @@ test('playlist toolbar appears only with 2+ players', () => {
   const w = boot(two);
   const bar = w.document.querySelector('.podcast-player-toolbar');
   assert.ok(bar, 'toolbar present with two players');
-  assert.equal(bar.querySelectorAll('.podcast-player-btn').length, 2);
+  assert.equal(bar.querySelectorAll('.podcast-player-prev, .podcast-player-next').length, 2);
+  assert.ok(bar.querySelector('.pp-help'), 'help button in the toolbar');
+
+  const one = boot(PAGE_HTML);
+  const bar1 = one.document.querySelector('.podcast-player-toolbar');
+  assert.ok(bar1, 'toolbar present with a single player (help lives there)');
+  assert.equal(
+    bar1.querySelectorAll('.podcast-player-prev, .podcast-player-next').length, 0,
+    'no playlist nav with one player');
+  assert.ok(bar1.querySelector('.pp-help'), 'help button present with one player');
 });
 
 // ── MediaSession (next/prev episode navigation) ──────────────────────────
@@ -569,7 +578,9 @@ test('v2: scrubber reflects time and carries aria-valuetext', () => {
   assert.equal(scrub.max, '600');
   assert.equal(scrub.value, '42');
   assert.match(scrub.getAttribute('aria-valuetext'), /0:42 \/ 10:00/);
-  assert.match(w.document.querySelector('.pp-time').textContent, /0:42 \/ 10:00/);
+  // v3: times split at the ends of the progress row.
+  assert.equal(w.document.querySelector('.pp-time').textContent, '0:42');
+  assert.equal(w.document.querySelector('.pp-time-total').textContent, '10:00');
 });
 
 test('v2: speed button cycles options and announces', async () => {
@@ -706,6 +717,50 @@ test('v2: time is a <time> element with datetime + hover-remaining span', () => 
   assert.equal(time.dateTime, 'PT42S');
   assert.match(rem.textContent, /9:18/);
   assert.match(rem.textContent, /restant/);
+});
+
+test('v3: controls split into progress row and transport row', () => {
+  const w = boot(PAGE_HTML);
+  const controls = w.document.querySelector('.pp-controls');
+  assert.ok(controls, 'controls container kept');
+  const progress = w.document.querySelector('.pp-progress');
+  const transport = w.document.querySelector('.pp-transport');
+  assert.ok(progress && transport, 'progress + transport rows present');
+  // DOM order = visual order = tab order: progress row first.
+  assert.equal(controls.firstElementChild, progress, 'progress row first');
+  assert.equal(progress.nextElementSibling, transport, 'transport row second');
+  // Progress row: current time at the left end, total at the right end.
+  assert.equal(progress.firstElementChild.className, 'pp-time-wrap');
+  assert.equal(progress.lastElementChild.className, 'pp-time-total-wrap');
+  // Transport row: nav group (back/play/forward), chapters group, spacer,
+  // settings group (speed/volume).
+  const nav = transport.querySelector('.pp-group-nav');
+  const chap = transport.querySelector('.pp-group-chap');
+  const settings = transport.querySelector('.pp-group-settings');
+  assert.ok(nav && chap && settings, 'three groups present');
+  assert.ok(nav.querySelector('.pp-btn-back'), 'back in nav group');
+  assert.ok(nav.querySelector('.pp-btn-play'), 'play in nav group');
+  assert.ok(nav.querySelector('.pp-btn-forward'), 'forward in nav group');
+  assert.ok(chap.querySelector('.pp-btn-chap-prev'), 'chapter prev in its group');
+  assert.ok(chap.querySelector('.pp-btn-chap-next'), 'chapter next in its group');
+  assert.ok(settings.querySelector('.pp-speed'), 'speed in settings group');
+  assert.ok(settings.querySelector('.pp-volume'), 'volume in settings group');
+  assert.ok(transport.querySelector('.pp-spacer'), 'spacer between groups');
+  // Help is out of the transport bar — it lives in the toolbar instead.
+  assert.ok(!transport.querySelector('.pp-help'), 'no help button in the transport');
+  const toolbar = w.document.querySelector('.pp-toolbar');
+  assert.ok(toolbar, 'toolbar present');
+  assert.ok(toolbar.querySelector('.pp-help'), 'help button moved to the toolbar');
+});
+
+test('v3: play button is dominant (48px round) and rows are stacked', () => {
+  const w = boot(PAGE_HTML);
+  const css = [...w.document.querySelectorAll('style')]
+    .map((s) => s.textContent).join('\n');
+  assert.match(css, /\.pp-btn-play \{[^}]*min-height: 48px/s, 'play larger than 40px default');
+  assert.match(css, /\.pp-controls \{[^}]*flex-direction: column/s, 'two-row stack');
+  assert.match(css, /\.pp-time-total-wrap:hover \.pp-time-total \{ display: none; \}/,
+    'hover swap now targets the total');
 });
 
 test('v2: chapter ticks drawn on the scrubber once duration is known', async () => {

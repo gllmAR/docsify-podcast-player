@@ -1,5 +1,21 @@
 # Audit d'interface — où placer les éléments (référence : lecteurs professionnels)
 
+> **✅ Livré en 1.6.7** — layout v3 implémenté (deux rangées, play dominant,
+> temps aux extrémités, groupes, help hors barre). Décisions prises à
+> l'implémentation :
+> - **Help** : bouton `?` dans le toolbar (à côté du download, aligné à
+>   droite), plus jamais dans la barre de transport ; raccourci `?` intact.
+> - **Download** : déplacé du `.pp-controls` vers le toolbar (près du titre).
+> - **Resume chip** : conservé dans le groupe nav juste après play (la
+>   rangée transport reste stable ; le déplacer dans `.pp-meta` reste
+>   possible, conteneur déjà prêt).
+> - **`.pp-controls`** : conservé comme wrapper colonne (`.pp-progress` +
+>   `.pp-transport`) — des tests ciblent `.pp-controls`, rétrocompat v1.
+> - **`.pp-help`** : la classe reste sur le bouton ; le dialogue est passé
+>   en `.pp-help-box` (le partage de classe bouton/dialogue était un bug CSS).
+> - **Cover ≥ 900 px** : 150 px.
+> - Le « restant au survol » se fait désormais au survol du temps total.
+
 Version analysée : player v2 (1.5.0) · Date : 2026-08 · Site : sn
 
 ---
