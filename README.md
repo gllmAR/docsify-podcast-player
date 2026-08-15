@@ -125,10 +125,17 @@ Notes:
 - iOS Safari: the main-thread blob fallback opens the file in a tab (platform
   limitation); the SW path is unaffected (attachment header).
 - The synthesized file carries iTunes-style metadata (`©nam`/`©ART`/`©alb`/`covr`
-  from the episode `README.md` frontmatter + cover PNG) and a spec-correct
-  `mvhd`/`tkhd` identity matrix, so Spotlight/Quick Look shows title, artist,
-  album and the waveform thumbnail (v1.0.5 fixed a 32-byte matrix that made
-  Quick Look fall back to a generic audio icon).
+  from the episode `README.md` frontmatter + cover PNG, plus `©too` encoder,
+  `trkn`, `©day`, `©grp`, `cpil`, `pgap` when the frontmatter provides the
+  data), a spec-correct `mvhd`/`tkhd` identity matrix (Quick Look shows title,
+  artist, album and the waveform thumbnail), a `tx3g` subtitle track from the
+  episode `.vtt`, and a QuickTime chapter track from the episode
+  `chapters.json` (bare array or Podcast Index v1.2.0 wrapper).
+- MediaSession: metadata (title/artist/album) with truthful artwork (MIME
+  sniffed from the URL, real `sizes` once the cover loads), `chapterInfo`
+  with per-chapter `img` artwork, `setPositionState` on playback progress,
+  `playbackState` following play/pause/ended, and `play`/`pause`/`stop`/
+  seek/next/prev action handlers.
 
 ## Development
 

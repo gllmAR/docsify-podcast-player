@@ -269,6 +269,14 @@
     img.loading = 'lazy';
     img.src = url;
     el._coverUrl = url;
+    img.addEventListener('load', function () {
+      if (img.naturalWidth && img.naturalHeight) {
+        el._coverSize = img.naturalWidth + 'x' + img.naturalHeight;
+        if (activeAudio === el || el.paused === false) {
+          updateMediaSession(el, playlist.findIndex(function (p) { return p.el === el; }));
+        }
+      }
+    });
     img.addEventListener('error', function () { img.remove(); });
     wrap.insertBefore(img, wrap.firstChild);
   }
@@ -338,8 +346,12 @@
       fetch(url).then(function (r) {
         if (!r.ok) throw new Error(r.status);
         return r.json();
-      }).then(function (chapters) {
-        if (!Array.isArray(chapters) || !chapters.length) { box.remove(); return; }
+      }).then(function (data) {
+        // Bare array (legacy) or Podcast Index v1.2.0 wrapper:
+        // { "version": "1.2.0", "chapters": […] }
+        var chapters = Array.isArray(data) ? data
+          : (data && Array.isArray(data.chapters) ? data.chapters : []);
+        if (!chapters.length) { box.remove(); return; }
         chapterDataCache[url] = chapters;
         el._chapters = chapters;
         render(list, chapters);
@@ -598,6 +610,16 @@
     if (!navigator.mediaSession) return;
     mediaSessionReady = true;
     try {
+      navigator.mediaSession.setActionHandler('play', function () {
+        if (activeAudio) activeAudio.play();
+        else if (playlist.length) goTo(0, true);
+      });
+      navigator.mediaSession.setActionHandler('pause', function () {
+        if (activeAudio) activeAudio.pause();
+      });
+      navigator.mediaSession.setActionHandler('stop', function () {
+        if (activeAudio) { activeAudio.pause(); activeAudio.currentTime = 0; }
+      });
       navigator.mediaSession.setActionHandler('nexttrack', function () {
         navToEpisode('.pagination-item--next');
       });
@@ -640,12 +662,46 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Truthful artwork entry: MIME sniffed from the URL, sizes reported from
+  // the image element when known (multi-size is a UA hint, not a promise).
+  function artworkEntry(url, size) {
+    var type = '';
+    var m = /\.(png|jpe?g|webp|gif|avif)$/i.exec(String(url).split('?')[0]);
+    if (m) {
+      type = m[1].toLowerCase();
+      if (type === 'jpg') type = 'jpeg';
+      type = 'image/' + type;
+    }
+    var entry = { src: url, sizes: size || 'any' };
+    if (type) entry.type = type;
+    return entry;
+  }
+
+  function updatePositionState(el) {
+    var ms = navigator.mediaSession;
+    if (!ms || typeof ms.setPositionState !== 'function') return;
+    if (!isFinite(el.duration) || el.duration <= 0) return;
+    try {
+      ms.setPositionState({
+        duration: el.duration,
+        playbackRate: el.playbackRate || 1,
+        position: el.currentTime || 0,
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  function setPlaybackState(state) {
+    var ms = navigator.mediaSession;
+    if (!ms) return;
+    try { ms.playbackState = state; } catch (e) { /* ignore */ }
+  }
+
   function updateMediaSession(el, index) {
     if (!navigator.mediaSession || !window.MediaMetadata) return;
     var title = trackTitle(el, index) || (document.title || 'Podcast');
     var artwork = [];
     if (el._coverUrl) {
-      artwork.push({ src: el._coverUrl, sizes: '512x512', type: 'image/png' });
+      artwork.push(artworkEntry(el._coverUrl, el._coverSize || 'any'));
     }
     try {
       var meta = {
@@ -656,11 +712,15 @@
       };
       if (el._chapters && el._chapters.length) {
         meta.chapterInfo = el._chapters.map(function (ch) {
-          return { title: ch.title || '', startTime: parseFloat(ch.startTime) || 0 };
+          var info = { title: ch.title || '', startTime: parseFloat(ch.startTime) || 0 };
+          if (ch.img) {
+            var imgUrl = isAbsolute(ch.img) ? ch.img : resolve(ch.img);
+            info.artwork = [artworkEntry(imgUrl)];
+          }
+          return info;
         });
       }
       navigator.mediaSession.metadata = new MediaMetadata(meta);
-      navigator.mediaSession.playbackState = 'playing';
     } catch (e) { /* ignore */ }
   }
 
@@ -807,6 +867,7 @@
 
     el.addEventListener('loadedmetadata', function () {
       restorePosition(el);
+      updatePositionState(el);
       try {
         if (sessionStorage.getItem('podcast-autoplay') === '1') {
           sessionStorage.removeItem('podcast-autoplay');
@@ -815,16 +876,26 @@
         }
       } catch (_) { /* ignore */ }
     }, { once: true });
-    el.addEventListener('timeupdate', function () { savePosition(el); });
+    el.addEventListener('timeupdate', function () {
+      savePosition(el);
+      updatePositionState(el);
+    });
+    el.addEventListener('durationchange', function () { updatePositionState(el); });
+    el.addEventListener('ratechange', function () { updatePositionState(el); });
+    el.addEventListener('seeked', function () { updatePositionState(el); });
     el.addEventListener('pause', function () {
       savePosition(el);
+      setPlaybackState('paused');
       if (activeAudio === el) activeAudio = null;
     });
+    el.addEventListener('ended', function () { setPlaybackState('paused'); });
 
     el.addEventListener('play', function () {
       activeAudio = el;
       attachHls(el);
       updateMediaSession(el, index);
+      setPlaybackState('playing');
+      updatePositionState(el);
       playlist.forEach(function (p) {
         if (p.el !== el) p.el.pause();
       });

@@ -156,6 +156,137 @@ test('tsToM4a picks the lowest-bandwidth variant', async (t) => {
   assert.ok(out.byteLength > 100000);
 });
 
+// ── subtitles + chapters (tx3g / chap tracks) ────────────────────────
+
+test('muxMp4: subtitle (tx3g) and chapter (chap) tracks validate with ffprobe', (t) => {
+  const fx = buildFixture();
+  if (!fx) return t.skip('ffmpeg not available');
+  let state = {};
+  const all = [];
+  let sr = 0, ch = 0, prof = 0;
+  fx.segments.forEach((seg) => {
+    const d = ts2m4a.demuxTs(seg, state);
+    state = d.state;
+    all.push(...d.frames);
+    if (!sr) { sr = d.sampleRate; ch = d.channels; prof = d.profile; }
+  });
+
+  const out = ts2m4a.muxMp4(all, {
+    sampleRate: sr, channels: ch, profile: prof,
+    subtitles: [
+      { start: 0.5, end: 2.5, text: 'Bonjour le monde' },
+      { start: 3.0, end: 5.0, text: 'Deuxième ligne du transcript' },
+    ],
+    chapters: [
+      { startTime: 0, title: 'Intro' },
+      { startTime: 2.0, title: 'Main' },
+    ],
+  });
+  const dir = mkdtempSync(path.join(tmpdir(), 'ts2m4a-sub-'));
+  const m4aPath = path.join(dir, 'out.m4a');
+  writeFileSync(m4aPath, Buffer.from(out));
+
+  const probe = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error',
+    '-show_entries', 'stream=index,codec_name,codec_type:format=format_name',
+    '-show_chapters', '-of', 'json', m4aPath,
+  ]).toString());
+
+  const types = probe.streams.map((s) => `${s.codec_type}:${s.codec_name}`).sort();
+  assert.ok(types.includes('audio:aac'), `audio stream (got ${types.join(', ')})`);
+  assert.ok(types.includes('subtitle:mov_text'), `subtitle stream (got ${types.join(', ')})`);
+  const subs = probe.streams.filter((s) => s.codec_type === 'subtitle');
+  assert.equal(subs.length, 1);
+  assert.ok(Array.isArray(probe.chapters) && probe.chapters.length >= 2,
+    `chapters present (got ${probe.chapters ? probe.chapters.length : 0})`);
+  assert.match(probe.chapters[0].tags.title || '', /Intro/);
+});
+
+test('muxMp4: chapters-only still emits a chap track', (t) => {
+  const fx = buildFixture();
+  if (!fx) return t.skip('ffmpeg not available');
+  let state = {};
+  const all = [];
+  let sr = 0, ch = 0, prof = 0;
+  fx.segments.forEach((seg) => {
+    const d = ts2m4a.demuxTs(seg, state);
+    state = d.state;
+    all.push(...d.frames);
+    if (!sr) { sr = d.sampleRate; ch = d.channels; prof = d.profile; }
+  });
+  const out = ts2m4a.muxMp4(all, {
+    sampleRate: sr, channels: ch, profile: prof,
+    chapters: [{ startTime: 0, title: 'Only' }],
+  });
+  const dir = mkdtempSync(path.join(tmpdir(), 'ts2m4a-chap-'));
+  const m4aPath = path.join(dir, 'out.m4a');
+  writeFileSync(m4aPath, Buffer.from(out));
+  const probe = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error', '-show_chapters', '-of', 'json', m4aPath,
+  ]).toString());
+  assert.ok(probe.chapters && probe.chapters.length === 1);
+  assert.equal(probe.chapters[0].tags.title, 'Only');
+});
+
+test('parseVtt: sn-style cues with speaker tags', () => {
+  const cues = ts2m4a.parseVtt(
+    'WEBVTT\n\n1\n00:00:06.000 --> 00:00:08.664\n<v Hôte>Vous utilisez Git tous les jours.</v>\n\n' +
+    '2\n00:00:08.664 --> 00:00:11.232\n<v Hôte>Mais est-ce que vous savez d\'où ça vient ?</v>\n');
+  assert.equal(cues.length, 2);
+  assert.equal(cues[0].start, 6);
+  assert.ok(Math.abs(cues[0].end - 8.664) < 0.001);
+  assert.match(cues[0].text, /Git/);
+  assert.match(cues[1].text, /d'où/);
+});
+
+test('parseFrontmatter: quoted, bare numbers, booleans', () => {
+  const fm = ts2m4a.parseFrontmatter(
+    '---\ntitle: "S02E09 — Qui a le droit de coder"\nepisode: 24\ncompilation: true\ngapless: false\ndate: "2026-08-14"\n---\n');
+  assert.equal(fm.title, 'S02E09 — Qui a le droit de coder');
+  assert.equal(fm.episode, 24);
+  assert.equal(fm.compilation, true);
+  assert.equal(fm.gapless, false);
+  assert.equal(fm.date, '2026-08-14');
+});
+
+test('tsToM4a end-to-end fetches chapters.json + .vtt and muxes them', async (t) => {
+  const fx = buildFixture();
+  if (!fx) return t.skip('ffmpeg not available');
+  const base = fx.playlistUrl.replace(/playlist\.m3u8$/, '');
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.endsWith('README.md')) {
+      return { ok: true, status: 200, text: async () =>
+        '---\ntitle: "Épisode test"\nauthor: "Balado SN"\nepisode: 7\ndate: "2026-08-14"\n---\n' };
+    }
+    if (u.endsWith('-cover.png')) return { ok: false, status: 404 };
+    if (u.endsWith('.json')) {
+      return { ok: true, status: 200, text: async () =>
+        JSON.stringify({ version: '1.2.0', chapters: [{ startTime: 0, title: 'Intro' }] }) };
+    }
+    if (u.endsWith('.vtt')) {
+      return { ok: true, status: 200, text: async () =>
+        'WEBVTT\n\n00:00:00.500 --> 00:00:02.500\nBonjour\n' };
+    }
+    return makeFixtureFetch(fx)(url);
+  };
+  const out = await ts2m4a.tsToM4a(fx.playlistUrl, { fetchImpl });
+  const dir = mkdtempSync(path.join(tmpdir(), 'ts2m4a-e2e-'));
+  const m4aPath = path.join(dir, 'out.m4a');
+  writeFileSync(m4aPath, Buffer.from(out));
+  const probe = JSON.parse(execFileSync('ffprobe', [
+    '-v', 'error',
+    '-show_entries', 'stream=codec_type:format_tags=title,artist,album,track',
+    '-show_chapters', '-of', 'json', m4aPath,
+  ]).toString());
+  assert.ok(probe.streams.some((s) => s.codec_type === 'subtitle'), 'subtitle track');
+  assert.ok(probe.chapters && probe.chapters.length === 1, 'chapter track');
+  const tags = probe.format.tags || {};
+  assert.equal(tags.title, 'Épisode test');
+  assert.equal(tags.artist, 'Balado SN');
+  assert.equal(tags.track, '7');
+});
+
 // ── URL mapping ───────────────────────────────────────────────────────
 
 test('toM3u8Url: local same-origin mapping', () => {

@@ -23,7 +23,7 @@
  */
 // ts2m4a comes from the plugin CDN; the import is cached with this
 // SW script at install time (bump ?v= when ts2m4a.VERSION changes).
-importScripts('https://gllmar.github.io/docsify-podcast-player/ts2m4a.js?v=1.0.5');
+importScripts('https://gllmar.github.io/docsify-podcast-player/ts2m4a.js?v=1.0.6');
 
 var cacheName = 'ts2m4a-' + self.ts2m4a.VERSION;
 

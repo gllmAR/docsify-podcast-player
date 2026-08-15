@@ -43,10 +43,14 @@ function boot(html, opts) {
   // No real HLS engine in jsdom: leave window.Hls undefined.
   window.fetch = async (u) => {
     if (String(u).endsWith('.json')) {
-      return { ok: true, json: async () => ([
-        { startTime: 0, title: 'Générique' },
-        { startTime: 30, title: 'Introduction' },
-      ]) };
+      // Podcast Index v1.2.0 wrapped format (what balado now emits).
+      return { ok: true, json: async () => ({
+        version: '1.2.0',
+        chapters: [
+          { startTime: 0, title: 'Générique', img: 'ch1.jpg' },
+          { startTime: 30, title: 'Introduction' },
+        ],
+      }) };
     }
     if (String(u).endsWith('.vtt')) {
       return { ok: true, text: async () => (
@@ -174,6 +178,131 @@ test('MediaSession metadata is set on play', () => {
   fire(audio, 'play');
   assert.ok(metadata, 'MediaSession metadata was set');
   assert.match(metadata.title, /Épisode 1/);
+});
+
+// ── MediaSession metadata quality (artwork, chapters, position) ───────
+
+test('MediaSession artwork carries a truthful MIME type and reported size', async () => {
+  let metadata = null;
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler() {},
+      set metadata(m) { metadata = m; },
+      get metadata() { return metadata; },
+      playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const audio = w.document.querySelector('audio');
+  fire(audio, 'play');
+  assert.ok(metadata.artwork.length >= 1);
+  const art = metadata.artwork[0];
+  assert.match(art.src, /ep-cover\.png$/);
+  assert.equal(art.type, 'image/png', 'MIME sniffed from the URL extension');
+  assert.ok(art.sizes, 'sizes present (any or real dimensions)');
+});
+
+test('MediaSession chapterInfo maps title/startTime and per-chapter img artwork', async () => {
+  let metadata = null;
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler() {},
+      set metadata(m) { metadata = m; },
+      get metadata() { return metadata; },
+      playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const audio = w.document.querySelector('audio');
+  fire(audio, 'play');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(metadata.chapterInfo, 'chapterInfo set from the v1.2.0 wrapper');
+  assert.equal(metadata.chapterInfo.length, 2);
+  assert.equal(metadata.chapterInfo[0].startTime, 0);
+  assert.ok(metadata.chapterInfo[0].artwork, 'per-chapter artwork present');
+  assert.equal(metadata.chapterInfo[0].artwork[0].type, 'image/jpeg');
+  assert.equal(metadata.chapterInfo[1].artwork, undefined,
+    'chapters without img carry no artwork entry');
+});
+
+test('MediaSession setPositionState reports duration/rate/position on timeupdate', async () => {
+  const states = [];
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler() {},
+      metadata: null,
+      playbackState: '',
+      setPositionState(s) { states.push(s); },
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const audio = w.document.querySelector('audio');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  Object.defineProperty(audio, 'currentTime', { value: 42, configurable: true });
+  audio.playbackRate = 1;                 // jsdom fires ratechange here
+  fire(audio, 'timeupdate');
+  assert.ok(states.length >= 1);
+  const last = states[states.length - 1];
+  assert.equal(last.duration, 600);
+  assert.equal(last.playbackRate, 1);
+  assert.equal(last.position, 42);
+});
+
+test('MediaSession playbackState follows play/pause/ended', async () => {
+  let state = '';
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler() {},
+      metadata: null,
+      set playbackState(s) { state = s; },
+      get playbackState() { return state; },
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const audio = w.document.querySelector('audio');
+  fire(audio, 'play');
+  assert.equal(state, 'playing');
+  fire(audio, 'pause');
+  assert.equal(state, 'paused');
+  fire(audio, 'ended');
+  assert.equal(state, 'paused');
+});
+
+test('MediaSession play/pause/stop handlers control the active audio', async () => {
+  const handlers = {};
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler: (a, h) => { handlers[a] = h; },
+      metadata: null, playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  assert.ok(handlers.play, 'play handler registered');
+  assert.ok(handlers.pause, 'pause handler registered');
+  assert.ok(handlers.stop, 'stop handler registered');
+  const audio = w.document.querySelector('audio');
+  let played = 0, paused = 0, pos = 99;
+  audio.play = () => { played++; };
+  audio.pause = () => { paused++; };
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => pos, set: (v) => { pos = v; }, configurable: true,
+  });
+  fire(audio, 'play');          // makes it the activeAudio
+  handlers.play();
+  assert.equal(played, 1, 'play handler plays the active audio');
+  handlers.pause();
+  assert.equal(paused, 1, 'pause handler pauses the active audio');
+  handlers.stop();
+  assert.equal(paused, 2, 'stop pauses');
+  assert.equal(pos, 0, 'stop rewinds to the start');
+});
+
+test('chapters JSON v1.2.0 wrapper renders the same list as a bare array', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 10));
+  const items = w.document.querySelectorAll('.podcast-player-chapters ol li');
+  assert.equal(items.length, 2, 'wrapped format unwrapped for the chapter list');
+  assert.match(items[0].textContent, /Générique/);
 });
 
 

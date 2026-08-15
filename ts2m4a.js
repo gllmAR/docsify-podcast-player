@@ -15,6 +15,13 @@
  *   ts2m4a.muxMp4(frames, opts)     → Uint8Array (ftyp + moov + mdat)
  *   ts2m4a.tsToM4a(m3u8Url, opts)   → Promise<Uint8Array>
  *   ts2m4a.handleM4aRequest(url, env) → Promise<Response|null> (SW route)
+ *   ts2m4a.parseVtt(text)           → [{ start, end, text }] (WebVTT cues)
+ *   ts2m4a.parseFrontmatter(text)   → { key: value } (quoted/bare/boolean)
+ *
+ * The muxer embeds, when available: full iTunes ilst metadata (title, artist,
+ * album, cover, encoder, track number, date, grouping, compilation, gapless),
+ * a `tx3g` subtitle track from the episode .vtt, and a QuickTime chapter
+ * track from the episode chapters JSON (bare array or Podcast Index v1.2.0).
  *
  * Unsupported (thrown as errors): encrypted playlists (#EXT-X-KEY), live
  * playlists (no #EXT-X-ENDLIST), non-AAC audio streams. Multi-variant
@@ -25,7 +32,7 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.0.5';
+  var VERSION = '1.0.6';
 
   var SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
@@ -328,6 +335,186 @@
     ]));
   }
 
+  // Build the optional text tracks: a tx3g subtitle track (from VTT cues)
+  // and a QuickTime chapter track (from the episode chapters JSON). The
+  // audio trak gets a `tref` → `chap` reference when chapters are present.
+  // Returns [{ kind: 'subtitle'|'chapter', handler, items: [{ text, durationMs }] }].
+  function textTrackSpecs(subtitles, chapters, movieDurationMs) {
+    var specs = [];
+    if (Array.isArray(subtitles) && subtitles.length) {
+      var sItems = [];
+      subtitles.forEach(function (c) {
+        var t = String(c.text || '').replace(/\s+/g, ' ').trim();
+        var start = parseFloat(c.start);
+        var end = parseFloat(c.end);
+        if (!t || !isFinite(start) || !isFinite(end) || end <= start) return;
+        sItems.push({ text: t, durationMs: Math.round((end - start) * 1000) });
+      });
+      if (sItems.length) specs.push({ kind: 'subtitle', handler: 'sbtl', items: sItems });
+    }
+    if (Array.isArray(chapters) && chapters.length) {
+      var cItems = [];
+      chapters.forEach(function (c, i) {
+        var t = String(c.title || '').trim();
+        var start = parseFloat(c.startTime);
+        if (!t || !isFinite(start)) return;
+        var end = (i + 1 < chapters.length)
+          ? parseFloat(chapters[i + 1].startTime)
+          : movieDurationMs / 1000;
+        if (!isFinite(end)) end = movieDurationMs / 1000;
+        var dur = Math.round((end - start) * 1000);
+        if (dur <= 0) return;
+        cItems.push({ text: t, durationMs: dur });
+      });
+      if (cItems.length) specs.push({ kind: 'chapter', handler: 'text', items: cItems });
+    }
+    return specs;
+  }
+
+  // One sample's bytes. Subtitle (tx3g) samples are raw UTF-8 text;
+  // chapter (QuickTime `text`) samples carry a u16 length prefix + the
+  // title (+ the `encd` box ffmpeg writes, tolerated by all readers).
+  function textSampleBytes(item, kind) {
+    var t = str(item.text);
+    if (kind !== 'chapter') return t;
+    var encd = new Uint8Array([
+      0x00, 0x00, 0x00, 0x0C, 'e'.charCodeAt(0), 'n'.charCodeAt(0),
+      'c'.charCodeAt(0), 'd'.charCodeAt(0), 0x00, 0x00, 0x01, 0x00,
+    ]);
+    return bytes([new Uint8Array(u16(t.length)), t, encd]);
+  }
+
+  // Legacy QuickTime `text` sample entry (as ffmpeg writes for chapters).
+  function textSampleEntry() {
+    var stub = new Uint8Array([
+      0x00, 0x00, 0x00, 0x01, // displayFlags
+      0x00, 0x00,             // horizontal + vertical justification
+      0x00, 0x00, 0x00, 0x00, // background color
+      0x00, 0x00, 0x00, 0x00, // default text box top/left
+      0x00, 0x00, 0x00, 0x00, // default text box bottom/right
+      0x00, 0x00, 0x00, 0x00, // StyleRecord start/end char
+      0x00, 0x01,             // fontID
+      0x00, 0x00,             // fontStyleFlags + fontSize
+      0x00, 0x00, 0x00, 0x00, // foreground color
+      0x00, 0x00, 0x00, 0x0D, 'f', 't', 'a', 'b', // FontTableBox size + 'ftab'
+      0x00, 0x01,             // entry count
+      0x00, 0x01,             // font ID
+      0x00,                   // font name length
+    ]);
+    return box('text', stub);
+  }
+
+  // One tx3g sample entry (stsd entry) with a minimal font table.
+  function tx3gSampleEntry() {
+    var fontTable = bytes([
+      new Uint8Array([0, 0]),                              // displayFlags
+      new Uint8Array([1]),                                 // font-count
+      new Uint8Array([0, 1]),                              // font-ID 1
+      bytes([str('sans-serif'), new Uint8Array([0])]),     // font-name + NUL
+    ]);
+    var entry = bytes([
+      new Uint8Array([0, 0, 0, 0]),                        // displayFlags
+      new Uint8Array([1]),                                 // h-justification: center
+      new Uint8Array([0xFF]),                              // v-justification: -1 (bottom)
+      new Uint8Array([0, 0, 0, 0]),                        // background-color-rgba
+      new Uint8Array(8),                                   // default text box (4×u16)
+      new Uint8Array(8),                                   // reserved
+      box('ftab', fontTable),
+    ]);
+    return box('tx3g', entry);
+  }
+
+  // One text trak (`text` for chapters, `tx3g` for subtitles).
+  // `startOffset` = offset of this track's samples inside mdat.
+  // Track timescale 1000 (ms), like the movie.
+  function buildTextTrack(trackId, kind, handler, items, startOffset) {
+    var samples = items.map(function (it) { return textSampleBytes(it, kind); });
+    var totalBytes = 0;
+    samples.forEach(function (s) { totalBytes += s.length; });
+    var totalMs = 0;
+    items.forEach(function (it) { totalMs += Math.max(1, Math.round(it.durationMs)); });
+
+    // stts: merge consecutive equal deltas
+    var sttsEntries = [];
+    items.forEach(function (it) {
+      var d = Math.max(1, Math.round(it.durationMs));
+      var last = sttsEntries[sttsEntries.length - 1];
+      if (last && last.delta === d) last.count++;
+      else sttsEntries.push({ count: 1, delta: d });
+    });
+    var sttsPayload = [verFlags(0, 0), new Uint8Array(u32(sttsEntries.length))];
+    sttsEntries.forEach(function (e) {
+      sttsPayload.push(new Uint8Array(u32(e.count)), new Uint8Array(u32(e.delta)));
+    });
+
+    var stszPayload = [verFlags(0, 0), new Uint8Array([0, 0, 0, 0]),
+      new Uint8Array(u32(samples.length))];
+    var sizes = new Uint8Array(4 * samples.length);
+    var view = new DataView(sizes.buffer);
+    samples.forEach(function (s, i) { view.setUint32(i * 4, s.length); });
+    stszPayload.push(sizes);
+
+    var stbl = box('stbl', bytes([
+      box('stsd', bytes([
+        verFlags(0, 0),
+        new Uint8Array([0, 0, 0, 1]),                      // entry_count
+        kind === 'chapter' ? textSampleEntry() : tx3gSampleEntry(),
+      ])),
+      box('stts', bytes(sttsPayload)),
+      box('stsc', bytes([verFlags(0, 0), new Uint8Array([0, 0, 0, 1]),
+        new Uint8Array([0, 0, 0, 1]), new Uint8Array(u32(samples.length)),
+        new Uint8Array([0, 0, 0, 1])])),
+      box('stsz', bytes(stszPayload)),
+      box('stco', bytes([verFlags(0, 0), new Uint8Array([0, 0, 0, 1]),
+        new Uint8Array(u32(startOffset))])),
+    ]));
+
+    var minf = box('minf', bytes([
+      fullbox('nmhd', 0, new Uint8Array(0)),               // null media header
+      box('dinf', fullbox('dref', 0, bytes([
+        new Uint8Array([0, 0, 0, 1]),
+        fullbox('url ', 1, new Uint8Array(0)),
+      ]))),
+      stbl,
+    ]));
+
+    var mdia = box('mdia', bytes([
+      fullbox('mdhd', 0, bytes([
+        new Uint8Array(8),
+        new Uint8Array(u32(1000)),                         // timescale (ms)
+        new Uint8Array(u32(totalMs)),
+        new Uint8Array([0x55, 0xC4, 0, 0]),                // language 'und'
+      ])),
+      fullbox('hdlr', 0, bytes([
+        new Uint8Array(4), str4(handler), new Uint8Array(12),
+        str4(kind === 'chapter' ? 'ChapterHandler' : 'SubtitleHandler'),
+        new Uint8Array(1),
+      ])),
+      minf,
+    ]));
+
+    return box('trak', bytes([
+      fullbox('tkhd', 7, bytes([
+        new Uint8Array(8),
+        new Uint8Array(u32(trackId)),
+        new Uint8Array(4),
+        new Uint8Array(u32(totalMs)),
+        new Uint8Array(8),
+        new Uint8Array([0, 0]),                            // layer
+        new Uint8Array([0, 0]),                            // alternate_group
+        new Uint8Array([0, 0]),                            // volume 0 (text)
+        new Uint8Array(2),                                 // reserved
+        new Uint8Array([
+          0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00,
+        ]),
+        new Uint8Array(8),                                 // width + height
+      ])),
+      mdia,
+    ]));
+  }
+
   function buildMoov(frames, opts, mdatOffset) {
     var sampleRate = opts.sampleRate || 48000;
     var channels = opts.channels || 2;
@@ -406,7 +593,29 @@
       minf,
     ]));
 
-    var trak = box('trak', bytes([
+    // Text tracks (subtitle + chapter) and their sample offsets in mdat:
+    // audio frames first, then subtitle samples, then chapter samples.
+    var specs = textTrackSpecs(opts.subtitles, opts.chapters, movieDuration);
+    var subTrak = null;
+    var chapTrak = null;
+    var subBytes = 0;
+    var chapBytes = 0;
+    var subOffset = mdatOffset + totalBytes;
+    if (specs.length) {
+      specs.forEach(function (spec) {
+        var n = 0;
+        spec.items.forEach(function (it) { n += textSampleBytes(it, spec.kind).length; });
+        if (spec.kind === 'subtitle') {
+          subBytes = n;
+          subTrak = buildTextTrack(2, 'subtitle', 'sbtl', spec.items, subOffset);
+        } else {
+          chapBytes = n;
+          chapTrak = buildTextTrack(3, 'chapter', 'text', spec.items, subOffset + subBytes);
+        }
+      });
+    }
+
+    var audioTrak = box('trak', bytes([
       fullbox('tkhd', 7, bytes([
         new Uint8Array(8),
         new Uint8Array([0, 0, 0, 1]),                    // track_ID
@@ -424,6 +633,8 @@
         ]),
         new Uint8Array(8),                               // width + height
       ])),
+      (chapTrak ? box('tref', box('chap', new Uint8Array(u32(3)))) :
+        new Uint8Array(0)),
       box('edts', fullbox('elst', 0, bytes([
         new Uint8Array([0, 0, 0, 1]),                    // entry_count
         new Uint8Array(u32(movieDuration)),               // segment_duration (movie scale)
@@ -432,6 +643,11 @@
       ]))),
       mdia,
     ]));
+
+    var tracks = [audioTrak];
+    if (subTrak) tracks.push(subTrak);
+    if (chapTrak) tracks.push(chapTrak);
+    var nextTrackId = 1 + (subTrak ? 1 : 0) + (chapTrak ? 1 : 0) + 1;
 
     return box('moov', bytes([
       fullbox('mvhd', 0, bytes([
@@ -447,9 +663,9 @@
           0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00,
         ]),
         new Uint8Array(24),                              // pre_defined
-        new Uint8Array([0, 0, 0, 2]),                    // next_track_ID
+        new Uint8Array(u32(nextTrackId)),
       ])),
-      trak,
+      bytes(tracks),
       (opts.metadata ? buildMetaBox(opts.metadata) : new Uint8Array(0)),
     ]));
   }
@@ -482,6 +698,30 @@
       var coverFlags = (metadata.cover[0] === 0xFF && metadata.cover[1] === 0xD8) ? 13 : 14;
       entries.push(item('covr', coverFlags, metadata.cover));
     }
+    // Full iTunes tag set (like ffmpeg's muxer): encoder, track number,
+    // release date, grouping (show/series), compilation, gapless.
+    entries.push(item('\u00A9too', 1, str('ts2m4a v' + VERSION)));
+    if (metadata.trackNumber) {
+      var tn = parseInt(metadata.trackNumber, 10);
+      if (isFinite(tn) && tn > 0 && tn < 65536) {
+        entries.push(item('trkn', 0, bytes([
+          new Uint8Array([0, 0]), new Uint8Array(u16(tn)),
+          new Uint8Array([0, 0]), new Uint8Array([0, 0]),
+        ])));
+      }
+    }
+    if (metadata.date) {
+      entries.push(item('\u00A9day', 1, str(String(metadata.date))));
+    }
+    if (metadata.grouping) {
+      entries.push(item('\u00A9grp', 1, str(metadata.grouping)));
+    }
+    if (metadata.compilation !== undefined) {
+      entries.push(item('cpil', 0, new Uint8Array([metadata.compilation ? 1 : 0])));
+    }
+    if (metadata.gapless !== undefined) {
+      entries.push(item('pgap', 0, new Uint8Array([metadata.gapless ? 1 : 0])));
+    }
     var ilst = box('ilst', bytes(entries));
     var hdlr = fullbox('hdlr', 0, bytes([
       new Uint8Array(4),
@@ -500,7 +740,19 @@
       new Uint8Array([0, 0, 0, 0]),                      // minor_version
       str('M4A '), str('isom'), str('iso2'),
     ]));
-    var mdat = box('mdat', bytes(frames));
+    // mdat payload: audio frames, then subtitle samples, then chapter samples
+    // (offsets must match buildMoov's stco layout).
+    var totalBytes = 0;
+    for (var i = 0; i < frames.length; i++) totalBytes += frames[i].length;
+    var count = frames.length;
+    var sampleRate = opts.sampleRate || 48000;
+    var movieDuration = Math.round(count * 1024 * 1000 / sampleRate);
+    var specs = textTrackSpecs(opts.subtitles, opts.chapters, movieDuration);
+    var mdatParts = [bytes(frames)];
+    specs.forEach(function (spec) {
+      spec.items.forEach(function (it) { mdatParts.push(textSampleBytes(it, spec.kind)); });
+    });
+    var mdat = box('mdat', bytes(mdatParts));
     // Pass 1: moov with placeholder stco to learn its length.
     var moovGuess = buildMoov(frames, opts, 0);
     var mdatOffset = ftyp.length + moovGuess.length + 8;
@@ -511,31 +763,48 @@
 
   // ── Orchestration ───────────────────────────────────────────────────
 
-  // Parse a simple YAML-ish frontmatter block (--- … ---).
+  // Parse a simple YAML-ish frontmatter block (--- … ---). Handles quoted
+  // strings, bare numbers, and true/false (e.g. `episode: 24`).
   function parseFrontmatter(text) {
     var m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
     if (!m) return {};
     var out = {};
     m[1].split(/\r?\n/).forEach(function (line) {
-      var kv = /^([a-zA-Z_]+):\s*"([^"]*)"/.exec(line);
-      if (kv) out[kv[1]] = kv[2];
+      var kv = /^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(?:"([^"]*)"|([^\s#][^#]*)?)\s*$/.exec(line);
+      if (!kv) return;
+      var key = kv[1];
+      var raw = kv[2] !== undefined ? kv[2] : (kv[3] !== undefined ? kv[3].trim() : '');
+      if (raw === 'true') out[key] = true;
+      else if (raw === 'false') out[key] = false;
+      else if (/^-?\d+$/.test(raw)) out[key] = parseInt(raw, 10);
+      else out[key] = raw;
     });
     return out;
   }
 
-  // Best-effort episode metadata: <dir>/README.md frontmatter + cover PNG.
+  // Best-effort episode metadata: <dir>/README.md frontmatter + cover PNG,
+  // plus the episode chapters JSON (bare array or Podcast Index v1.2.0
+  // wrapper) and the WebVTT transcript for the tx3g subtitle track.
   function fetchMetadata(m3u8Url, fetchImpl) {
     var dir = m3u8Url.replace(/[^/]*$/, '');
     var stem = m3u8Url.replace(/\.m3u8(?:[?#].*)?$/i, '');
     var meta = {};
-    return fetchImpl(dir + 'README.md').then(function (r) {
-      if (!r.ok) throw new Error('no README');
-      return r.text();
-    }).then(function (text) {
+    function getText(url) {
+      return fetchImpl(url).then(function (r) {
+        if (!r.ok) throw new Error('fetch ' + r.status);
+        return r.text();
+      });
+    }
+    return getText(dir + 'README.md').then(function (text) {
       var fm = parseFrontmatter(text);
       meta.title = fm.title;
       meta.artist = fm.author;
       meta.album = fm.author;
+      meta.trackNumber = fm.episode;
+      meta.date = fm.date;
+      meta.grouping = fm.grouping;
+      meta.compilation = fm.compilation;
+      meta.gapless = fm.gapless;
       return fetchImpl(stem + '-cover.png');
     }).then(function (r) {
       if (!r.ok) throw new Error('no cover');
@@ -545,7 +814,57 @@
       return meta;
     }).catch(function () {
       return meta;
+    }).then(function (m) {
+      // Chapters + subtitles are optional; never fail the download on them.
+      return getText(stem + '.json').then(function (json) {
+        var data;
+        try { data = JSON.parse(json); } catch (_) { return m; }
+        // Podcast Index v1.2.0 wrapper: { "version": "1.2.0", "chapters": […] }
+        m.chapters = Array.isArray(data) ? data
+          : (data && Array.isArray(data.chapters) ? data.chapters : []);
+        return m;
+      }).catch(function () { return m; });
+    }).then(function (m) {
+      return getText(stem + '.vtt').then(function (vtt) {
+        m.subtitles = parseVtt(vtt);
+        return m;
+      }).catch(function () { return m; });
     });
+  }
+
+  // Parse WebVTT cue timing (00:00:01.000 --> 00:00:04.000) into cues.
+  function parseVtt(text) {
+    var cues = [];
+    var lines = String(text || '').split(/\r?\n/);
+    var cur = null;
+    lines.forEach(function (line) {
+      var m = /^(\d{2}:\d{2}:\d{2})[.,](\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2})[.,](\d{3})/.exec(line) ||
+              /^(\d{2}:\d{2})[.,](\d{3})\s*-->\s*(\d{2}:\d{2})[.,](\d{3})/.exec(line);
+      if (m) {
+        if (cur && cur.text) cues.push(cur);
+        var st = (m[1].length === 8 ? vttHMS(m[1]) : vttMS(m[1])) + (+m[2]) / 1000;
+        var en = (m[3].length === 8 ? vttHMS(m[3]) : vttMS(m[3])) + (+m[4]) / 1000;
+        cur = { start: st, end: en, text: '' };
+        return;
+      }
+      if (cur && line && line.indexOf('-->') < 0 && line.indexOf('WEBVTT') < 0 &&
+          !/^\d+$/.test(line.trim()) && !/^NOTE\b/.test(line)) {
+        var t = line.replace(/<[^>]+>/g, '').replace(/^<v\s+[^>]*>/i, '').trim();
+        if (t) cur.text += (cur.text ? '\n' : '') + t;
+      }
+    });
+    if (cur && cur.text) cues.push(cur);
+    return cues;
+  }
+
+  function vttHMS(s) {
+    var p = s.split(':');
+    return (+p[0]) * 3600 + (+p[1]) * 60 + (+p[2]);
+  }
+
+  function vttMS(s) {
+    var p = s.split(':');
+    return (+p[0]) * 60 + (+p[1]);
   }
 
   function tsToM4a(m3u8Url, opts) {
@@ -593,6 +912,8 @@
           return muxMp4(allFrames, {
             sampleRate: sampleRate, channels: channels, profile: profile,
             metadata: metadata,
+            chapters: metadata.chapters,
+            subtitles: metadata.subtitles,
           });
         });
       });
@@ -694,6 +1015,8 @@
     tsToM4a: tsToM4a,
     handleM4aRequest: handleM4aRequest,
     toM3u8Url: toM3u8Url,
+    parseVtt: parseVtt,
+    parseFrontmatter: parseFrontmatter,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = ts2m4a;
