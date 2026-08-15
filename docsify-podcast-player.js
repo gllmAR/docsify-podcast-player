@@ -107,6 +107,7 @@
       position: 'Position', volume: 'Volume', mute: 'Couper le son',
       unmute: 'Rétablir le son',
       speed: 'Vitesse : {x}×',
+      remaining: 'restant',
       download: 'Télécharger l\u2019épisode',
       loading: 'Chargement\u2026',
       chapters: 'Chapitres', transcript: 'Transcript',
@@ -129,6 +130,7 @@
       position: 'Position', volume: 'Volume', mute: 'Mute',
       unmute: 'Unmute',
       speed: 'Speed: {x}×',
+      remaining: 'left',
       download: 'Download episode',
       loading: 'Loading\u2026',
       chapters: 'Chapters', transcript: 'Transcript',
@@ -313,6 +315,14 @@
     return (h ? h + ':' : '') + mm + ':' + ss;
   }
 
+  function timeDatetime(t) {
+    t = Math.max(0, Math.floor(t));
+    var h = Math.floor(t / 3600);
+    var m = Math.floor((t % 3600) / 60);
+    var s = t % 60;
+    return 'PT' + (h ? h + 'H' : '') + (m || h ? m + 'M' : '') + s + 'S';
+  }
+
   function parseVttTime(stamp) {
     var m = /^(\d+):(\d{2}):(\d{2})[.,](\d{3})$/.exec(stamp) ||
             /^(\d{2}):(\d{2})[.,](\d{3})$/.exec(stamp);
@@ -486,6 +496,7 @@
         if (!chapters.length) { box.remove(); return; }
         chapterDataCache[url] = chapters;
         el._chapters = chapters;
+        drawScrubberTicks(el);
         render(list, chapters);
         if (activeAudio === el || el.paused === false) {
           updateMediaSession(el, playlist.findIndex(function(p) { return p.el === el; }));
@@ -780,15 +791,32 @@
 
     // ── Time ──
     if (settings.showTime !== false) {
-      var time = document.createElement('span');
+      var timeWrap = document.createElement('span');
+      timeWrap.className = 'pp-time-wrap';
+      var time = document.createElement('time');
       time.className = 'podcast-player-time pp-time';
       time.setAttribute('aria-live', 'off');
+      time.dateTime = 'PT0S';
       time.textContent = '0:00 / 0:00';
       el._timeEl = time;
-      controls.appendChild(time);
+      timeWrap.appendChild(time);
+      var remaining = document.createElement('span');
+      remaining.className = 'pp-remaining';
+      remaining.setAttribute('aria-hidden', 'true');
+      remaining.textContent = '0:00';
+      el._remainingEl = remaining;
+      timeWrap.appendChild(remaining);
+      controls.appendChild(timeWrap);
     }
 
     // ── Scrubber ──
+    var scrubWrap = document.createElement('span');
+    scrubWrap.className = 'pp-scrubber-wrap';
+    var ticks = document.createElement('span');
+    ticks.className = 'pp-ticks';
+    ticks.setAttribute('aria-hidden', 'true');
+    scrubWrap.appendChild(ticks);
+    el._ticksEl = ticks;
     var scrub = document.createElement('input');
     scrub.type = 'range';
     scrub.className = 'pp-scrubber';
@@ -807,8 +835,11 @@
     scrub.addEventListener('keydown', function (e) {
       if (e.key === 'ArrowLeft') { e.preventDefault(); seekBy(el, -backSec); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); seekBy(el, backSec); }
+      else if (e.key === 'Home') { e.preventDefault(); el.currentTime = 0; }
+      else if (e.key === 'End') { e.preventDefault(); el.currentTime = el.duration || 0; }
     });
-    controls.appendChild(scrub);
+    scrubWrap.appendChild(scrub);
+    controls.appendChild(scrubWrap);
 
     // ── Speed ──
     if (settings.showSpeed) {
@@ -858,10 +889,19 @@
       vol.max = 100;
       vol.value = 100;
       vol.setAttribute('aria-label', settings.labels.volume);
+      // Restore persisted volume (0–1), if any.
+      try {
+        var savedVol = parseFloat(localStorage.getItem('pp-volume'));
+        if (isFinite(savedVol) && savedVol >= 0 && savedVol <= 1) {
+          el.volume = savedVol;
+          vol.value = String(Math.round(savedVol * 100));
+        }
+      } catch (_) { /* storage unavailable */ }
       vol.addEventListener('input', function () {
         el.volume = (parseFloat(vol.value) || 0) / 100;
         if (el.volume > 0 && el.muted) el.muted = false;
         syncMuteUI(el);
+        try { localStorage.setItem('pp-volume', String(el.volume)); } catch (_) { /* ignore */ }
       });
       volWrap.appendChild(vol);
       el._muteBtn = mute;
@@ -876,6 +916,7 @@
       help.className = 'podcast-player-btn pp-btn pp-help';
       help.setAttribute('aria-label', settings.labels.help);
       help.appendChild(icon('help'));
+      el._helpBtn = help;
       help.addEventListener('click', function () { openHelpDialog(wrap, el, help); });
       controls.appendChild(help);
     }
@@ -933,10 +974,32 @@
     return el.closest('.podcast-player') || document.body;
   }
 
+  function drawScrubberTicks(el) {
+    var ticks = el._ticksEl;
+    if (!ticks) return;
+    ticks.textContent = '';
+    if (!el._chapters || !el._chapters.length) return;
+    if (!isFinite(el.duration) || el.duration <= 0) return;
+    var dur = el.duration;
+    el._chapters.forEach(function (ch) {
+      var start = parseFloat(ch.startTime) || 0;
+      if (start <= 0 || start >= dur) return; // skip edge ticks
+      var i = document.createElement('i');
+      i.style.left = (start / dur * 100).toFixed(2) + '%';
+      ticks.appendChild(i);
+    });
+  }
+
   function updateTimeDisplay(el) {
     if (el._timeEl) {
       el._timeEl.textContent = formatTime(el.currentTime) + ' / ' +
         (isFinite(el.duration) ? formatTime(el.duration) : '\u221E');
+      el._timeEl.dateTime = timeDatetime(el.currentTime);
+    }
+    if (el._remainingEl) {
+      var rem = (isFinite(el.duration) ? el.duration : 0) - el.currentTime;
+      el._remainingEl.textContent = (rem > 0 ? '\u2212' : '') + formatTime(Math.abs(rem)) +
+        ' ' + settings.labels.remaining;
     }
     if (el._scrubber) {
       var dur = isFinite(el.duration) ? el.duration : 0;
@@ -944,6 +1007,7 @@
       el._scrubber.value = String(Math.max(0, Math.min(Math.floor(el.currentTime), el._scrubber.max)));
       el._scrubber.setAttribute('aria-valuetext',
         formatTime(el.currentTime) + ' / ' + formatTime(dur));
+      drawScrubberTicks(el);
     }
     if (el._chapPrevBtn && el._chapters && el._chapters.length) {
       var ch = chapterIndexAt(el, el.currentTime);
@@ -1052,6 +1116,7 @@
     var rows = [
       ['Space', settings.labels.play + ' / ' + settings.labels.pause],
       ['\u2190 \u2192', tpl(settings.labels.back, { s: backSecLabel() })],
+      ['J / L', tpl(settings.labels.back, { s: backSecLabel() })],
       ['\u2191 \u2193', settings.labels.volume],
       ['M', settings.labels.mute + ' / ' + settings.labels.unmute],
       ['PageUp / PageDown', settings.labels.chapPrev + ' / ' + settings.labels.chapNext],
@@ -1420,7 +1485,7 @@
 
   function setupKeyboard(wrap, el) {
     wrap.setAttribute('aria-keyshortcuts',
-      'Space ArrowLeft ArrowRight ArrowUp ArrowDown KeyM PageUp PageDown KeyT KeyC');
+      'Space ArrowLeft ArrowRight ArrowUp ArrowDown KeyJ KeyL KeyM PageUp PageDown KeyT KeyC Slash');
     wrap.addEventListener('keydown', function (e) {
       // Never hijack keys while a control is focused (buttons, sliders…),
       // whether the event targets the control itself or bubbles from a container.
@@ -1440,6 +1505,20 @@
         case 'ArrowRight':
           e.preventDefault();
           el.currentTime = Math.min(el.duration || Infinity, el.currentTime + settings.seekSeconds);
+          break;
+        case 'KeyJ':
+          e.preventDefault();
+          el.currentTime = Math.max(0, el.currentTime - (settings.backForward || settings.seekSeconds || 10));
+          break;
+        case 'KeyL':
+          e.preventDefault();
+          el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (settings.backForward || settings.seekSeconds || 10));
+          break;
+        case 'Slash':
+          if (e.shiftKey) { // '?' — shortcuts help
+            e.preventDefault();
+            openHelpDialog(wrap, el, el._helpBtn || null);
+          }
           break;
         case 'ArrowUp':
           e.preventDefault();
@@ -1660,6 +1739,7 @@
       '  --pp-cover: 120px;',
       '  --pp-shadow: 0 1px 3px rgb(0 0 0 / .10), 0 4px 16px rgb(0 0 0 / .06);',
       '  --pp-focus: 0 0 0 2px var(--pp-bg), 0 0 0 4px var(--pp-accent);',
+      '  --pp-tick: rgb(127 127 127 / .55);',
       '}',
       '@media (prefers-color-scheme: dark) {',
       '  .podcast-player {',
@@ -1680,6 +1760,9 @@
       '  border: 1px solid var(--pp-border); border-radius: var(--pp-radius);',
       '  box-shadow: var(--pp-shadow);',
       '  padding: .9em; display: flex; flex-direction: column; gap: .7em;',
+      '}',
+      '.podcast-player.pp-active .pp-card {',
+      '  border-color: var(--pp-accent); box-shadow: 0 0 0 1px var(--pp-accent), var(--pp-shadow);',
       '}',
       '.pp-main { display: flex; gap: 1em; align-items: flex-start; }',
       '.podcast-player-cover {',
@@ -1719,7 +1802,20 @@
       '.pp-btn-play:hover { filter: brightness(1.08); }',
       '.podcast-player-time { font-variant-numeric: tabular-nums; font-size: .85em;',
       '  color: var(--pp-text-muted); white-space: nowrap; }',
-      '.pp-scrubber { flex: 1 1 120px; min-width: 90px; accent-color: var(--pp-accent); }',
+      '.pp-time-wrap { position: relative; display: inline-flex; align-items: baseline; }',
+      '.pp-remaining { display: none; font-variant-numeric: tabular-nums; font-size: .85em;',
+      '  color: var(--pp-text-muted); white-space: nowrap; }',
+      '@media (hover: hover) and (pointer: fine) {',
+      '  .pp-time-wrap:hover .podcast-player-time { display: none; }',
+      '  .pp-time-wrap:hover .pp-remaining { display: inline; }',
+      '}',
+      '.pp-scrubber-wrap { position: relative; flex: 1 1 120px; min-width: 90px;',
+      '  display: flex; align-items: center; }',
+      '.pp-scrubber { flex: 1; width: 100%; min-width: 0; accent-color: var(--pp-accent); }',
+      '.pp-ticks { position: absolute; left: 0; right: 0; top: 50%;',
+      '  transform: translateY(-50%); pointer-events: none; height: 0; }',
+      '.pp-ticks i { position: absolute; top: 0; width: 2px; height: 14px;',
+      '  margin-top: -7px; border-radius: 1px; background: var(--pp-tick); }',
       '.pp-volume { display: inline-flex; align-items: center; gap: .3em; }',
       '.pp-volume-range { width: 70px; accent-color: var(--pp-accent); }',
       '.pp-speed { min-width: 3em; }',
@@ -1832,6 +1928,7 @@
       '@media (forced-colors: active) {',
       '  .podcast-player-btn, .pp-card, .podcast-player-transcript,',
       '  .pp-transcript-search, .pp-help { border: 1px solid CanvasText; }',
+      '  .pp-ticks i { background: CanvasText; }',
       '  .pp-btn-play, .podcast-player-chapters li.active,',
       '  .podcast-player-transcript p[aria-current="true"] {',
       '    background: Highlight; color: HighlightText; }',
@@ -1850,8 +1947,8 @@
       '  .podcast-player { --pp-cover: 88px; }',
       '  .pp-controls { gap: .3em; }',
       '  .podcast-player-btn { min-height: 44px; min-width: 44px; }',
-      '  .pp-scrubber { flex: 1 1 100%; order: 10; }',
-      '  .pp-time { order: 9; }',
+      '  .pp-scrubber-wrap { flex: 1 1 100%; order: 10; }',
+      '  .pp-time-wrap { order: 9; }',
       '  .pp-volume-range { width: 56px; }',
       '}',
     ].join('\n');

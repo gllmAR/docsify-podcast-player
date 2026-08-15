@@ -20,7 +20,7 @@ const PAGE_HTML = `<!doctype html><html><head></head><body>
 
 function boot(html, opts) {
   opts = opts || {};
-  const { overrides, mediaSession, mediaMetadata, serviceWorker } = opts;
+  const { overrides, mediaSession, mediaMetadata, serviceWorker, localStorage: seedStorage } = opts;
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
@@ -31,6 +31,11 @@ function boot(html, opts) {
   global.document = window.document;
 
   window.$docsify = Object.assign({ plugins: [] }, overrides || {});
+  if (seedStorage) {
+    for (const k of Object.keys(seedStorage)) {
+      window.localStorage.setItem(k, String(seedStorage[k]));
+    }
+  }
   if (mediaSession) {
     Object.defineProperty(window.navigator, 'mediaSession',
       { value: mediaSession, configurable: true });
@@ -651,4 +656,90 @@ test('v2: download failure announces via role=alert and live region', async () =
   assert.ok(alert, 'role=alert error element present');
   const live = w.document.querySelector('.pp-live');
   assert.match(live.textContent, /Téléchargement indisponible/);
+});
+
+test('v2: time is a <time> element with datetime + hover-remaining span', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const time = w.document.querySelector('.pp-time');
+  assert.equal(time.tagName, 'TIME', 'time element');
+  assert.equal(time.dateTime, 'PT0S');
+  const rem = w.document.querySelector('.pp-remaining');
+  assert.ok(rem, 'remaining span present');
+  assert.equal(rem.getAttribute('aria-hidden'), 'true');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  Object.defineProperty(audio, 'currentTime', { value: 42, configurable: true });
+  fire(audio, 'timeupdate');
+  assert.equal(time.dateTime, 'PT42S');
+  assert.match(rem.textContent, /9:18/);
+  assert.match(rem.textContent, /restant/);
+});
+
+test('v2: chapter ticks drawn on the scrubber once duration is known', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 10));
+  const audio = w.document.querySelector('audio');
+  const ticks = w.document.querySelector('.pp-ticks');
+  assert.ok(ticks, 'ticks layer present');
+  assert.equal(ticks.getAttribute('aria-hidden'), 'true');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  fire(audio, 'timeupdate');
+  const marks = ticks.querySelectorAll('i');
+  assert.equal(marks.length, 1, 'one inner tick for the chapter at 30s');
+  assert.equal(marks[0].style.left, '5%');
+});
+
+test('v2: scrubber Home/End seek to start and end', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const scrub = w.document.querySelector('.pp-scrubber');
+  let t = 50;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  scrub.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }));
+  assert.equal(t, 0, 'Home seeks to 0');
+  scrub.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
+  assert.equal(t, 600, 'End seeks to duration');
+});
+
+test('v2: J/L keyboard aliases seek ±seekSeconds', () => {
+  const w = boot(PAGE_HTML);
+  const wrap = w.document.querySelector('.podcast-player');
+  const audio = w.document.querySelector('audio');
+  let t = 50;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  wrap.dispatchEvent(new w.KeyboardEvent('keydown', { code: 'KeyJ', bubbles: true, cancelable: true }));
+  assert.equal(t, 40, 'J seeks back 10s');
+  wrap.dispatchEvent(new w.KeyboardEvent('keydown', { code: 'KeyL', bubbles: true, cancelable: true }));
+  assert.equal(t, 50, 'L seeks forward 10s');
+});
+
+test('v2: "?" opens the shortcuts dialog and Esc closes it', () => {
+  const w = boot(PAGE_HTML);
+  const wrap = w.document.querySelector('.podcast-player');
+  wrap.dispatchEvent(new w.KeyboardEvent('keydown', { code: 'Slash', shiftKey: true, bubbles: true, cancelable: true }));
+  const dialog = w.document.getElementById('pp-help-dialog');
+  assert.ok(dialog, 'help dialog opened by ?');
+  assert.equal(dialog.getAttribute('role'), 'dialog');
+  dialog.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.ok(!w.document.getElementById('pp-help-dialog'), 'Esc closes the dialog');
+});
+
+test('v2: volume persists to localStorage and restores on boot', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  const vol = w.document.querySelector('.pp-volume-range');
+  vol.value = '42';
+  fire(vol, 'input');
+  assert.equal(w.localStorage.getItem('pp-volume'), '0.42');
+
+  const w2 = boot(PAGE_HTML, { localStorage: { 'pp-volume': '0.5' } });
+  const audio2 = w2.document.querySelector('audio');
+  assert.equal(audio2.volume, 0.5, 'volume restored from localStorage');
+  assert.equal(w2.document.querySelector('.pp-volume-range').value, '50');
 });
