@@ -763,6 +763,76 @@ test('v3: play button is dominant (48px round) and rows are stacked', () => {
     'hover swap now targets the total');
 });
 
+test('v3: chapter markers on the scrubber are clickable and jump to the chapter', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 30)); // chapters fetch resolves
+  const audio = w.document.querySelector('audio');
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  let t = 0;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  audio.play = () => {};
+  fire(audio, 'timeupdate');
+  const markers = w.document.querySelectorAll('.pp-ticks i');
+  assert.equal(markers.length, 1, 'one marker at 30 s (edge ticks skipped)');
+  assert.ok(markers[0].title, 'marker carries the chapter title');
+  markers[0].click();
+  assert.equal(t, 30, 'clicking the marker seeks to the chapter start');
+});
+
+test('v3: bookmarks — mark at current position, list, seek, toggle remove', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  let t = 0;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  audio.play = () => {};
+  const btn = w.document.querySelector('.pp-bookmark');
+  assert.ok(btn, 'bookmark button present');
+  assert.equal(btn.getAttribute('aria-pressed'), 'false');
+
+  t = 120;
+  fire(audio, 'timeupdate');
+  btn.click();
+  const stored = JSON.parse(w.localStorage.getItem('podcast-bookmarks:ep.m3u8'));
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].t, 120);
+  const list = w.document.querySelector('.pp-bookmarks ol');
+  assert.ok(list.querySelector('.pp-bookmark-go'), 'list item rendered');
+  assert.equal(list.querySelector('.pp-bookmark-go').textContent, '2:00');
+
+  // Seek from the list.
+  t = 5;
+  list.querySelector('.pp-bookmark-go').click();
+  assert.equal(t, 120, 'clicking the bookmark seeks to it');
+
+  // Toggle: clicking the button near an existing bookmark removes it.
+  t = 121;
+  btn.click();
+  assert.equal(JSON.parse(w.localStorage.getItem('podcast-bookmarks:ep.m3u8')).length, 0);
+  assert.ok(w.document.querySelector('.pp-bookmark-empty'), 'empty state shown');
+});
+
+test('v3: bookmark button reflects a bookmark at the current position', () => {
+  const w = boot(PAGE_HTML);
+  const audio = w.document.querySelector('audio');
+  let t = 0;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  audio.play = () => {};
+  const btn = w.document.querySelector('.pp-bookmark');
+  t = 42;
+  btn.click(); // marks 42
+  fire(audio, 'timeupdate');
+  assert.equal(btn.getAttribute('aria-pressed'), 'true', 'pressed at the marked position');
+  t = 100;
+  fire(audio, 'timeupdate');
+  assert.equal(btn.getAttribute('aria-pressed'), 'false', 'released away from the mark');
+});
+
 test('v2: chapter ticks drawn on the scrubber once duration is known', async () => {
   const w = boot(PAGE_HTML);
   await new Promise((r) => setTimeout(r, 10));

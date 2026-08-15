@@ -32,7 +32,12 @@ browser — so the repo never has to store the m4a.
 - **Cover art** — auto-detected `<stem>-cover.png` next to the audio file, or
   set explicitly with `data-cover="…"`.
 - **Chapters** — a `<name>.json` file next to the audio (or `data-chapters="…"`)
-  renders a clickable chapter list that seeks the player.
+  renders a clickable chapter list that seeks the player; chapter markers on
+  the scrubber bar are clickable zones (pointer devices) that jump to the
+  chapter start.
+- **Bookmarks** — the bookmark button marks/unmarks the current position
+  (toggle within 3 s); a "Signets" panel lists per-episode bookmarks
+  (localStorage) with seek + delete buttons.
 - **Transcript** — the WebVTT subtitles track becomes a toggleable, clickable
   transcript (each cue seeks the player); speaker labels (`<v …>` tags) are
   styled separately, the active cue is highlighted and auto-scrolled.

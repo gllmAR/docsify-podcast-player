@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.7';
+  var PLUGIN_VERSION = '1.6.8';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -91,6 +91,7 @@
     showSpeed: true,
     showVolume: true,
     showChapterNav: true,
+    showBookmarks: true,              // bookmark button + panel (localStorage)
     backForward: 10,                  // back/forward buttons (seconds)
     speedOptions: [0.75, 1, 1.25, 1.5, 2],
     transcriptFollow: true,
@@ -130,6 +131,11 @@
       followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
       resume: 'Reprendre à {t}',
+      bookmark: 'Marquer', bookmarks: 'Signets',
+      bookmarkAdded: 'Signet ajouté à {t}',
+      bookmarkRemoved: 'Signet retiré à {t}',
+      bookmarkDelete: 'Supprimer le signet à {t}',
+      bookmarkEmpty: 'Aucun signet pour cet épisode.',
       global: 'Lecteur',
       help: 'Raccourcis clavier', closeHelp: 'Fermer',
       error: 'Erreur', retry: 'Réessayer',
@@ -159,6 +165,11 @@
       followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
       resume: 'Resume at {t}',
+      bookmark: 'Bookmark', bookmarks: 'Bookmarks',
+      bookmarkAdded: 'Bookmark added at {t}',
+      bookmarkRemoved: 'Bookmark removed at {t}',
+      bookmarkDelete: 'Delete bookmark at {t}',
+      bookmarkEmpty: 'No bookmarks for this episode.',
       global: 'Player',
       help: 'Keyboard shortcuts', closeHelp: 'Close',
       error: 'Error', retry: 'Retry',
@@ -806,6 +817,7 @@
     help: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
     share: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>',
     close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+    bookmark: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg>',
   };
 
   function icon(name) {
@@ -815,7 +827,7 @@
     return span;
   }
 
-  function buildControls(media, wrap, card) {
+  function buildControls(media, el, wrap, card) {
     var controls = document.createElement('div');
     controls.className = 'pp-controls';
     card.appendChild(controls);
@@ -1060,6 +1072,21 @@
       settingsGroup.appendChild(volWrap);
     }
 
+    // ── Bookmark (mark / unmark the current position) ──
+    if (settings.showBookmarks) {
+      var bm = document.createElement('button');
+      bm.type = 'button';
+      bm.className = 'podcast-player-btn pp-btn pp-bookmark';
+      bm.setAttribute('aria-pressed', 'false');
+      bm.setAttribute('aria-label', settings.labels.bookmark);
+      bm.appendChild(icon('bookmark'));
+      media._bookmarkBtn = bm;
+      bm.addEventListener('click', function () {
+        toggleBookmark(media, el, wrap);
+      });
+      settingsGroup.appendChild(bm);
+    }
+
     return controls;
   }
 
@@ -1127,12 +1154,26 @@
     if (!media._chapters || !media._chapters.length) return;
     if (!isFinite(media.duration) || media.duration <= 0) return;
     var dur = media.duration;
-    media._chapters.forEach(function (ch) {
+    var currentIdx = chapterIndexAt(media, media.currentTime);
+    media._chapters.forEach(function (ch, i) {
       var start = parseFloat(ch.startTime) || 0;
       if (start <= 0 || start >= dur) return; // skip edge ticks
-      var i = document.createElement('i');
-      i.style.left = (start / dur * 100).toFixed(2) + '%';
-      ticks.appendChild(i);
+      // Clickable chapter marker on the scrubber bar (G4): clicking the
+      // marker jumps to the chapter start; clicking elsewhere on the track
+      // keeps the native exact seek. Pointer-fine only (see CSS); keyboard
+      // users keep the existing chapter list.
+      var m = document.createElement('i');
+      m.className = 'pp-chap-marker' + (i === currentIdx ? ' active' : '');
+      m.dataset.index = String(i);
+      m.style.left = (start / dur * 100).toFixed(2) + '%';
+      m.title = ch.title || ('Chapitre ' + (i + 1));
+      m.addEventListener('click', function () {
+        media.currentTime = start;
+        var p = media.play();
+        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        announce(wrapFor(media), tpl(settings.labels.cueAt, { t: formatTime(start) }));
+      });
+      ticks.appendChild(m);
     });
   }
 
@@ -1163,6 +1204,7 @@
       media._chapPrevBtn.disabled = ch <= 0;
       media._chapNextBtn.disabled = ch < 0 || ch >= media._chapters.length - 1;
     }
+    updateBookmarkButton(media);
   }
 
   function chapterIndexAt(media, t) {
@@ -1693,6 +1735,129 @@
     try { sessionStorage.removeItem(key); } catch (_) { /* ignore */ }
   }
 
+  // ── Bookmarks (per episode, localStorage) ───────────────────────────
+
+  function bookmarksKey(el) {
+    var src = el.dataset.originalSrc || el.getAttribute('src') || '';
+    return 'podcast-bookmarks:' + src;
+  }
+
+  function readBookmarks(el) {
+    var out = [];
+    try {
+      var raw = localStorage.getItem(bookmarksKey(el));
+      if (raw) {
+        var arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          out = arr.filter(function (b) {
+            return b && isFinite(parseFloat(b.t));
+          }).map(function (b) { return { t: parseFloat(b.t), at: b.at || 0 }; });
+        }
+      }
+    } catch (_) { /* ignore */ }
+    return out;
+  }
+
+  function writeBookmarks(el, list) {
+    try { localStorage.setItem(bookmarksKey(el), JSON.stringify(list)); } catch (_) { /* ignore */ }
+  }
+
+  // Mark/unmark the current position (toggle within a 3 s window).
+  function toggleBookmark(media, el, wrap) {
+    var t = media.currentTime || 0;
+    if (!isFinite(t) || t <= 0) return;
+    var list = readBookmarks(el);
+    var near = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (Math.abs(list[i].t - t) < 3) { near = i; break; }
+    }
+    if (near >= 0) {
+      list.splice(near, 1);
+      announce(wrap, tpl(settings.labels.bookmarkRemoved, { t: formatTime(t) }));
+    } else {
+      list.push({ t: t, at: Date.now() });
+      list.sort(function (a, b) { return a.t - b.t; });
+      announce(wrap, tpl(settings.labels.bookmarkAdded, { t: formatTime(t) }));
+    }
+    writeBookmarks(el, list);
+    if (media._bookmarkListEl) renderBookmarks(media, el, media._bookmarkListEl);
+    updateBookmarkButton(media);
+  }
+
+  function updateBookmarkButton(media) {
+    var btn = media._bookmarkBtn;
+    if (!btn) return;
+    var srcEl = media._sourceEl || media;
+    var t = media.currentTime || 0;
+    var pressed = false;
+    readBookmarks(srcEl).forEach(function (b) {
+      if (Math.abs(b.t - t) < 3) pressed = true;
+    });
+    btn.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+  }
+
+  function renderBookmarks(media, el, list) {
+    var box = list.closest('details');
+    var sum = box ? box.querySelector('summary') : null;
+    var marks = readBookmarks(el);
+    list.innerHTML = '';
+    if (sum) {
+      sum.textContent = settings.labels.bookmarks +
+        (marks.length ? ' (' + marks.length + ')' : '');
+    }
+    if (!marks.length) {
+      var empty = document.createElement('li');
+      empty.className = 'pp-bookmark-empty';
+      empty.textContent = settings.labels.bookmarkEmpty;
+      list.appendChild(empty);
+      return;
+    }
+    marks.forEach(function (b) {
+      var li = document.createElement('li');
+      var go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'podcast-player-btn pp-bookmark-go';
+      go.textContent = formatTime(b.t);
+      go.setAttribute('aria-label', tpl(settings.labels.cueAt, { t: formatTime(b.t) }));
+      go.addEventListener('click', function () {
+        media.currentTime = b.t;
+        var p = media.play();
+        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+      });
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'podcast-player-btn pp-bookmark-del';
+      del.setAttribute('aria-label', tpl(settings.labels.bookmarkDelete, { t: formatTime(b.t) }));
+      del.appendChild(icon('close'));
+      del.addEventListener('click', function () {
+        var l = readBookmarks(el);
+        for (var i = 0; i < l.length; i++) {
+          if (Math.abs(l[i].t - b.t) < 0.5) { l.splice(i, 1); break; }
+        }
+        writeBookmarks(el, l);
+        renderBookmarks(media, el, list);
+        updateBookmarkButton(media);
+      });
+      li.appendChild(go);
+      li.appendChild(del);
+      list.appendChild(li);
+    });
+  }
+
+  function buildBookmarks(el, media, wrap, panels) {
+    if (!settings.showBookmarks) return;
+    var box = document.createElement('details');
+    box.className = 'podcast-player-bookmarks pp-bookmarks';
+    var sum = document.createElement('summary');
+    sum.textContent = settings.labels.bookmarks;
+    box.appendChild(sum);
+    var list = document.createElement('ol');
+    box.appendChild(list);
+    panels.appendChild(box);
+    media._bookmarkListEl = list;
+    renderBookmarks(media, el, list);
+  }
+
   function savePosition(el) {
     if (!el.duration || el.seeking) return;
     try { localStorage.setItem(positionKey(el), String(el.currentTime)); } catch (_) { /* ignore */ }
@@ -1715,6 +1880,7 @@
     // media === el (unchanged behaviour).
     var media = mediaEl || el;
     if (media !== el) cleanupMediaListeners(media);
+    media._sourceEl = el; // bookmarks/positions key on the page element
     var wrap = document.createElement('div');
     wrap.className = 'podcast-player';
     wrap.dataset.print = settings.print || 'hide';
@@ -1748,7 +1914,7 @@
 
     addCover(media, wrap, main);
 
-    var controls = buildControls(media, wrap, card);
+    var controls = buildControls(media, el, wrap, card);
     // Download sits next to the title (toolbar), not inside the transport.
     buildDownload(el, wrap, bar);
 
@@ -1757,6 +1923,7 @@
     card.appendChild(panels);
     buildChapters(media, wrap, panels);
     buildTranscript(media, wrap, panels);
+    buildBookmarks(el, media, wrap, panels);
 
     wrap.appendChild(el);
 
@@ -1948,8 +2115,16 @@
       '.pp-scrubber { flex: 1; width: 100%; min-width: 0; accent-color: var(--pp-accent); }',
       '.pp-ticks { position: absolute; left: 0; right: 0; top: 50%;',
       '  transform: translateY(-50%); pointer-events: none; height: 0; }',
-      '.pp-ticks i { position: absolute; top: 0; width: 2px; height: 14px;',
-      '  margin-top: -7px; border-radius: 1px; background: var(--pp-tick); }',
+      '.pp-ticks i { position: absolute; top: 0; width: 14px; height: 14px;',
+      '  margin-top: -7px; transform: translateX(-50%); }',
+      '.pp-ticks i::after { content: ""; position: absolute; left: 50%; top: 0;',
+      '  width: 2px; height: 14px; margin-left: -1px; border-radius: 1px;',
+      '  background: var(--pp-tick); }',
+      '.pp-ticks i.active::after { background: var(--pp-accent); }',
+      '@media (hover: hover) and (pointer: fine) {',
+      '  .pp-ticks i { pointer-events: auto; cursor: pointer; }',
+      '  .pp-ticks i:hover::after { background: var(--pp-accent); }',
+      '}',
       '.pp-tooltip { position: absolute; top: -1.9em; transform: translateX(-50%);',
       '  background: var(--pp-text); color: var(--pp-bg); font-size: .72em;',
       '  padding: .2em .55em; border-radius: 4px; pointer-events: none;',
@@ -1961,6 +2136,20 @@
       '.pp-volume-range { width: 70px; accent-color: var(--pp-accent); }',
       '.pp-speed { min-width: 3em; }',
       '.pp-resume { color: var(--pp-accent); border-color: var(--pp-accent); }',
+      '.pp-bookmark[aria-pressed="true"] { color: var(--pp-accent);',
+      '  border-color: var(--pp-accent); }',
+      // ── Bookmarks panel ──
+      '.podcast-player-bookmarks { font-size: .92em; }',
+      '.podcast-player-bookmarks summary { cursor: pointer; font-weight: 600;',
+      '  padding: .3em 0; }',
+      '.podcast-player-bookmarks ol { margin: .3em 0; padding-left: 1.3em;',
+      '  list-style: none; }',
+      '.podcast-player-bookmarks li { display: flex; align-items: center;',
+      '  gap: .45em; margin-bottom: .3em; }',
+      '.pp-bookmark-empty { color: var(--pp-text-muted); font-style: italic; }',
+      '.pp-bookmark-go { min-height: 2em; min-width: 3.6em; padding: .1em .5em;',
+      '  font-size: .9em; font-variant-numeric: tabular-nums; }',
+      '.pp-bookmark-del { min-height: 2em; min-width: 2em; padding: .1em; }',
       // ── Panels ──
       '.pp-panels { display: grid; gap: .7em; }',
       '@media (min-width: 900px) { .pp-panels { grid-template-columns: 1fr 1fr; } }',
@@ -2103,7 +2292,7 @@
       '@media (forced-colors: active) {',
       '  .podcast-player-btn, .pp-card, .podcast-player-transcript,',
       '  .pp-transcript-search, .pp-help-box { border: 1px solid CanvasText; }',
-      '  .pp-ticks i { background: CanvasText; }',
+      '  .pp-ticks i::after { background: CanvasText; }',
       '  .pp-btn-play, .podcast-player-chapters li.active,',
       '  .podcast-player-transcript p[aria-current="true"] {',
       '    background: Highlight; color: HighlightText; }',
@@ -2842,6 +3031,7 @@
       transcriptSearch: user.transcriptSearch !== undefined ? user.transcriptSearch : DEFAULTS.transcriptSearch,
       helpDialog: user.helpDialog !== undefined ? user.helpDialog : DEFAULTS.helpDialog,
       resumeChip: user.resumeChip !== undefined ? user.resumeChip : DEFAULTS.resumeChip,
+      showBookmarks: user.showBookmarks !== undefined ? user.showBookmarks : DEFAULTS.showBookmarks,
       downloadSw: user.downloadSw !== undefined ? user.downloadSw : DEFAULTS.downloadSw,
       unified: user.unified !== undefined ? user.unified : DEFAULTS.unified,
       feedUrl: user.feedUrl !== undefined ? user.feedUrl : DEFAULTS.feedUrl,

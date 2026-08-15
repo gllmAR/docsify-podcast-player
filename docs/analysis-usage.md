@@ -92,13 +92,15 @@ player (1.6.5).
 ### P2
 3. **Sleep timer** (G3) — cycle 15/30/60/fin d'épisode, bouton dans la
    barre (menu), annonce live, persistance de session.
-4. **Chapitres cliquables sur la barre** (G4) — zones cliquables sur le
-   scrubber aux positions des chapitres (pointer:fine + clavier via la
-   liste existante).
+4. ~~**Chapitres cliquables sur la barre** (G4)~~ — ✅ livré 1.6.8 : zones
+   cliquables sur le scrubber aux positions des chapitres (pointer:fine ;
+   clavier via la liste existante), titre en `title`, marqueur du chapitre
+   courant accentué.
 5. **Bandeau fin d'épisode** (G5) — « Suivant : {titre} » + bouton play ;
    complète l'autoAdvance.
-6. **Bookmarks** (G6) — bouton « marquer » + liste dans le panneau
-   (localStorage par épisode) ; utile pour les citations du cours.
+6. ~~**Bookmarks** (G6)~~ — ✅ livré 1.6.8 : bouton « marquer » (toggle
+   ±3 s, `aria-pressed`) + panneau « Signets » par épisode (localStorage),
+   aller à / supprimer.
 7. **Copier le transcript** (G8) + **sauter l'intro** (G9, config
    `skipIntroSeconds` ou chapitre 0).
 
