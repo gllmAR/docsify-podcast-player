@@ -75,13 +75,13 @@ player (1.6.5).
 
 ## 4. Recommandations priorisées
 
-### P1 (prochain sprint)
-1. **`autoAdvance`** (G1) — le feed fournit déjà `next` : à `ended`,
-   naviguer vers `currentEntry().next` (hash docsify) ; annonce live
-   « Prochain épisode : X » ; si autoplay refusé → état prêt + chip.
-2. **Partage avec timestamp** (G2) — lire `?t=MM:SS` (ou `#t=`) au boot du
-   lecteur global → seek + play optionnel ; bouton « copier le lien à
-   cette position » dans la barre (l'URL du route + `?t=`).
+### P1 — ✅ livré (1.6.6)
+1. **`autoAdvance`** — à `ended` : annonce live « Prochain épisode : X »,
+   chargement du suivant (feed), tentative de play, navigation vers sa
+   page (hash docsify). Config `autoAdvance` (défaut on en unifié).
+2. **Partage horodaté** — `?t=MM:SS` (ou secondes) seek au chargement
+   (`&autoplay=1` tente la lecture) ; bouton partage dans la barre qui
+   copie le lien horodaté de l'épisode joué.
 
 ### P2
 3. **Sleep timer** (G3) — cycle 15/30/60/fin d'épisode, bouton dans la

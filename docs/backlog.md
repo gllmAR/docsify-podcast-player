@@ -14,7 +14,7 @@
 
 ## Backlog
 
-- [ ] **Mode navigation pilotée par le lecteur** (`autoAdvance`)
+- [x] **Mode navigation pilotée par le lecteur** (`autoAdvance`) — livré 1.6.6
       Le lecteur contrôle l'URL : à la fin d'un épisode, il navigue vers la
       page du prochain épisode (URL change via le routeur docsify).
       - Config : `autoAdvance: true | 'next-episode' | url` ;

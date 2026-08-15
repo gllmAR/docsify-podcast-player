@@ -17,6 +17,12 @@ browser — so the repo never has to store the m4a.
 - **Resume** — playback position is saved to `localStorage` on every
   `timeupdate` (survives tab close); a "Reprendre à …" chip appears on return
   (15 s < position < 30 s from the end), cleared when the episode ends.
+- **Auto-advance** — at episode end the unified player loads the next
+  episode from the catalog and navigates to its page (`autoAdvance`,
+  default on in unified mode; the URL gains `?t=MM:SS` when sharing).
+- **Timestamp sharing** — `#/…/?t=12:34` seeks on load (`&autoplay=1`
+  attempts playback); a share button in the global bar copies a
+  timestamped link.
 - **Download (TS → M4A)** — a download button links to the real
   `…/{stem}.m4a` URL. The site's [service worker](#download--service-worker)
   synthesizes the file from the HLS segments at fetch time; without a SW the

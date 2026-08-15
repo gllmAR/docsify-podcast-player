@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.5';
+  var PLUGIN_VERSION = '1.6.6';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -101,6 +101,7 @@
     downloadSw: true,                 // true=auto-detect 'sw.js' at site
                                      // root, false=off, string=explicit path
     unified: false,                   // persistent global player (see docs/unified-player.md)
+    autoAdvance: true,                // at end: load + navigate to the next episode (unified)
     feedUrl: true,                    // episode catalog: true=auto-detect
                                      // 'feed.json' then 'podcast.xml', string=path,
                                      // false=off (DOM-only behaviour)
@@ -124,6 +125,7 @@
       refollow: 'Reprendre le suivi',
       switchEp: 'Basculer', goToPage: 'Aller à la page',
       prevEp: 'Épisode précédent', nextEp: 'Épisode suivant',
+      nextEpAnnounce: 'Prochain épisode : {t}', share: 'Partager', linkCopied: 'Lien copié',
       followSuspended: 'Suivi de la lecture suspendu',
       followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
@@ -152,6 +154,7 @@
       refollow: 'Resume following',
       switchEp: 'Switch', goToPage: 'Go to page',
       prevEp: 'Previous episode', nextEp: 'Next episode',
+      nextEpAnnounce: 'Next episode: {t}', share: 'Share', linkCopied: 'Link copied',
       followSuspended: 'Playback following suspended',
       followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
@@ -801,6 +804,7 @@
     muted: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>',
     download: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
     help: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    share: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>',
     close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   };
 
@@ -2215,6 +2219,13 @@
     navNext.appendChild(icon('chapNext'));
     navNext.disabled = true;
     bar.appendChild(navNext);
+    var shareBtn = document.createElement('button');
+    shareBtn.type = 'button';
+    shareBtn.className = 'podcast-player-btn pp-btn pp-global-share';
+    shareBtn.setAttribute('aria-label', settings.labels.share);
+    shareBtn.appendChild(icon('share'));
+    shareBtn.addEventListener('click', shareCurrent);
+    bar.appendChild(shareBtn);
     var close = document.createElement('button');
     close.type = 'button';
     close.className = 'podcast-player-btn pp-btn pp-global-close';
@@ -2252,9 +2263,20 @@
     gAudio.addEventListener('ended', function () {
       clearPosition(gAudio);
       syncGlobalPlayUI(false);
+      autoAdvanceNext();
     });
     gAudio.addEventListener('loadedmetadata', function () {
       restorePosition(gAudio);
+      var t = timeParam();
+      if (isFinite(t) && t > 0) {
+        gAudio.currentTime = Math.min(t, isFinite(gAudio.duration) ? gAudio.duration : t);
+        try {
+          if (/[?&]autoplay=1/.test(window.location.hash)) {
+            var p = gAudio.play();
+            if (p && p.catch) p.catch(function () { /* blocked */ });
+          }
+        } catch (_) { /* ignore */ }
+      }
       syncGlobalBar();
     });
     gAudio.addEventListener('timeupdate', function () {
@@ -2266,8 +2288,54 @@
 
     gWrap.appendChild(bar);
     gWrap.hidden = true;
+    ensureLiveRegion(gWrap);
     document.body.appendChild(gWrap);
     loadFeed();
+  }
+
+  function timeParam() {
+    var m = /[?&]t=([^&]+)/.exec(window.location.hash);
+    if (!m) return NaN;
+    var raw = decodeURIComponent(m[1]);
+    var mm = /^(\d+):(\d{1,2})$/.exec(raw);
+    if (mm) return (+mm[1]) * 60 + (+mm[2]);
+    var s = parseFloat(raw);
+    return isFinite(s) ? s : NaN;
+  }
+
+  // At episode end: load the next episode from the catalog, try to keep
+  // playing (autoplay may be blocked), and navigate to its page.
+  function autoAdvanceNext() {
+    if (!settings.autoAdvance) return;
+    loadFeed().then(function () {
+      var entry = neighborEntry(1);
+      if (!entry) return;
+      announce(gWrap, tpl(settings.labels.nextEpAnnounce, { t: entry.title }));
+      globalLoadEntry(entry);
+      var p = gAudio.play();
+      if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+      if (entry.pageUrl && gFeed && gFeed.series && gFeed.series.baseUrl) {
+        var base = gFeed.series.baseUrl.replace(/\/$/, '');
+        if (entry.pageUrl.indexOf(base) === 0) {
+          window.location.hash = '#/' + entry.pageUrl.slice(base.length).replace(/^\//, '');
+        }
+      }
+    });
+  }
+
+  // Copy a shareable link pointing at the playing episode + current time.
+  function shareCurrent() {
+    if (!gAudio.getAttribute('src')) return;
+    var t = formatTime(Math.floor(gAudio.currentTime || 0));
+    var base = location.origin + location.pathname;
+    var route = gLoadedRoute || window.location.hash.split('?')[0];
+    var url = base + route + '?t=' + t;
+    var done = function () { announce(gWrap, settings.labels.linkCopied); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done, done);
+    } else {
+      done();
+    }
   }
 
   function syncGlobalNav() {
@@ -2725,6 +2793,7 @@
       downloadSw: user.downloadSw !== undefined ? user.downloadSw : DEFAULTS.downloadSw,
       unified: user.unified !== undefined ? user.unified : DEFAULTS.unified,
       feedUrl: user.feedUrl !== undefined ? user.feedUrl : DEFAULTS.feedUrl,
+      autoAdvance: user.autoAdvance !== undefined ? user.autoAdvance : DEFAULTS.autoAdvance,
       print: user.print || DEFAULTS.print,
       labels: labels,
     };

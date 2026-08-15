@@ -24,7 +24,7 @@ function boot(html, opts) {
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
-  const url = 'https://example.com/#/episodes/01/';
+  const url = opts.url || 'https://example.com/#/episodes/01/';
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   global.window = window;
@@ -1248,4 +1248,60 @@ test('unified: RSS fallback parses the catalog when feed.json is absent', async 
   await new Promise((r) => setTimeout(r, 30));
   const gAudio = w.document.querySelector('.pp-global audio');
   assert.ok(gAudio.getAttribute('src').endsWith('/episodes/02/ep2.m3u8'));
+});
+
+// ── P1: autoAdvance + timestamp sharing ─────────────────────────────
+
+test('unified: ended auto-advances to the next episode and navigates', async () => {
+  const w = bootUnified(UNIFIED_HTML, { feed: 'json' });
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 40));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  fire(gAudio, 'ended');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(gAudio.getAttribute('src').endsWith('/episodes/02/ep2.m3u8'),
+    'next episode loaded on ended');
+  assert.ok(w.location.hash.indexOf('/episodes/02/') !== -1,
+    'navigated to the next episode page');
+  const live = w.document.querySelector('.pp-global .pp-live');
+  assert.match(live.textContent, /Prochain épisode : Épisode 2/);
+});
+
+test('unified: autoAdvance:false keeps the source on ended', async () => {
+  const w = bootUnified(UNIFIED_HTML, {
+    overrides: { podcastPlayer: { unified: true, autoAdvance: false } },
+    feed: 'json',
+  });
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 40));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  const src = gAudio.getAttribute('src');
+  fire(gAudio, 'ended');
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(gAudio.getAttribute('src'), src, 'source unchanged');
+});
+
+test('unified: ?t=MM:SS in the URL seeks the global player', async () => {
+  const w = bootUnified(UNIFIED_HTML, { url: 'https://example.com/#/episodes/01/?t=12:34' });
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let t = 0;
+  Object.defineProperty(gAudio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  fire(gAudio, 'loadedmetadata');
+  assert.equal(t, 754, 'seeked to 12:34');
+});
+
+test('unified: share button copies a timestamped link', async () => {
+  const w = bootUnified(UNIFIED_HTML);
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  Object.defineProperty(gAudio, 'currentTime', { value: 42, configurable: true });
+  w.document.querySelector('.pp-global-share').click();
+  await new Promise((r) => setTimeout(r, 40));
+  const live = w.document.querySelector('.pp-global .pp-live');
+  assert.match(live.textContent, /Lien copié/);
 });
