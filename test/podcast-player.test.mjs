@@ -660,6 +660,9 @@ test('v2: resume chip appears when a saved position exists', async () => {
   assert.ok(chip, 'resume chip present');
   assert.equal(chip.hidden, false);
   assert.match(chip.textContent, /Reprendre à 2:00/);
+  // Sober UI: the chip is a callout in the meta, out of the transport row.
+  assert.ok(chip.closest('.pp-meta'), 'chip is a callout under the title');
+  assert.ok(!chip.closest('.pp-transport'), 'chip out of the transport row');
 });
 
 test('v2: help dialog opens on ? button, Esc closes and restores focus', async () => {
@@ -761,6 +764,15 @@ test('v3: play button is dominant (48px round) and rows are stacked', () => {
   assert.match(css, /\.pp-controls \{[^}]*flex-direction: column/s, 'two-row stack');
   assert.match(css, /\.pp-time-total-wrap:hover \.pp-time-total \{ display: none; \}/,
     'hover swap now targets the total');
+});
+
+test('v3: chapter nav group appears only once chapters exist', async () => {
+  const w = boot(PAGE_HTML);
+  const group = w.document.querySelector('.pp-group-chap');
+  assert.ok(group, 'chapter group element exists');
+  assert.equal(group.hidden, true, 'hidden before chapters resolve');
+  await new Promise((r) => setTimeout(r, 30)); // chapters fetch resolves
+  assert.equal(group.hidden, false, 'visible once chapters are loaded');
 });
 
 test('v3: chapter markers on the scrubber are clickable and jump to the chapter', async () => {

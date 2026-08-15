@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.8';
+  var PLUGIN_VERSION = '1.6.9';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -551,6 +551,7 @@
         if (!chapters.length) { box.remove(); return; }
         chapterDataCache[url] = chapters;
         media._chapters = chapters;
+        if (media._chapGroupEl) media._chapGroupEl.hidden = false;
         drawScrubberTicks(media);
         render(list, chapters);
         if (activeAudio === media || media.paused === false) {
@@ -845,6 +846,9 @@
     transport.appendChild(navGroup);
     var chapGroup = document.createElement('div');
     chapGroup.className = 'pp-group pp-group-chap';
+    // Sober UI: the chapter-nav group appears only once chapters exist.
+    chapGroup.hidden = true;
+    media._chapGroupEl = chapGroup;
     transport.appendChild(chapGroup);
     var spacer = document.createElement('div');
     spacer.className = 'pp-spacer';
@@ -864,21 +868,6 @@
       if (media.paused) media.play(); else media.pause();
     });
     navGroup.appendChild(play);
-
-    // ── Resume chip ──
-    if (settings.resumeChip) {
-      var chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'podcast-player-btn pp-resume';
-      chip.hidden = true;
-      chip.addEventListener('click', function () {
-        media.currentTime = media._resumeAt || 0;
-        media.play();
-        chip.hidden = true;
-      });
-      media._resumeChip = chip;
-      navGroup.appendChild(chip);
-    }
 
     // ── Back / forward ──
     var backSec = settings.backForward || settings.seekSeconds || 10;
@@ -1907,9 +1896,33 @@
     titleEl.textContent = trackTitle(el, index) || '';
     var sub = document.createElement('div');
     sub.className = 'pp-sub';
-    sub.textContent = [settings.artist, settings.album].filter(Boolean).join(' \u00B7 ');
+    // Sober: never repeat "Podcast · Podcast" when artist === album.
+    var credits = Array.from(new Set(
+      [settings.artist, settings.album].filter(Boolean)));
+    if (credits.length) {
+      sub.textContent = credits.join(' \u00B7 ');
+    } else {
+      sub.style.display = 'none';
+    }
     meta.appendChild(titleEl);
     meta.appendChild(sub);
+    // Resume chip: contextual callout under the title — out of the
+    // transport row, so the transport stays quiet (audit v3, rule 6).
+    if (settings.resumeChip) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'podcast-player-btn pp-resume';
+      chip.hidden = true;
+      chip.addEventListener('click', function () {
+        media.currentTime = media._resumeAt || 0;
+        var p = media.play();
+        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        chip.hidden = true;
+      });
+      media._resumeChip = chip;
+      el._resumeChip = chip;
+      meta.appendChild(chip);
+    }
     main.appendChild(meta);
 
     addCover(media, wrap, main);
@@ -2077,6 +2090,7 @@
       '.pp-progress { display: flex; align-items: center; gap: .6em; }',
       '.pp-transport { display: flex; align-items: center; gap: .75em; flex-wrap: wrap; }',
       '.pp-group { display: inline-flex; align-items: center; gap: .35em; }',
+      '.pp-group[hidden] { display: none; }',
       '.pp-spacer { flex: 1 1 auto; min-width: .5em; }',
       '.podcast-player-btn {',
       '  border: 1px solid var(--pp-border); background: var(--pp-bg-alt);',
@@ -2136,6 +2150,7 @@
       '.pp-volume-range { width: 70px; accent-color: var(--pp-accent); }',
       '.pp-speed { min-width: 3em; }',
       '.pp-resume { color: var(--pp-accent); border-color: var(--pp-accent); }',
+      '.pp-meta .pp-resume { align-self: flex-start; margin-top: .5em; }',
       '.pp-bookmark[aria-pressed="true"] { color: var(--pp-accent);',
       '  border-color: var(--pp-accent); }',
       // ── Bookmarks panel ──
@@ -2860,7 +2875,13 @@
     meta.appendChild(titleEl);
     var sub = document.createElement('div');
     sub.className = 'pp-sub';
-    sub.textContent = [settings.artist, settings.album].filter(Boolean).join(' \u00B7 ');
+    var credits = Array.from(new Set(
+      [settings.artist, settings.album].filter(Boolean)));
+    if (credits.length) {
+      sub.textContent = credits.join(' \u00B7 ');
+    } else {
+      sub.style.display = 'none';
+    }
     meta.appendChild(sub);
     main.appendChild(meta);
 

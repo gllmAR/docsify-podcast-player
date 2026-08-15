@@ -6,15 +6,26 @@
 > - **Help** : bouton `?` dans le toolbar (à côté du download, aligné à
 >   droite), plus jamais dans la barre de transport ; raccourci `?` intact.
 > - **Download** : déplacé du `.pp-controls` vers le toolbar (près du titre).
-> - **Resume chip** : conservé dans le groupe nav juste après play (la
->   rangée transport reste stable ; le déplacer dans `.pp-meta` reste
->   possible, conteneur déjà prêt).
+> - **Resume chip** : callout sous le titre dans `.pp-meta` (1.6.9) — hors
+>   du transport, qui reste silencieux ; même logique, conteneur changé.
 > - **`.pp-controls`** : conservé comme wrapper colonne (`.pp-progress` +
 >   `.pp-transport`) — des tests ciblent `.pp-controls`, rétrocompat v1.
 > - **`.pp-help`** : la classe reste sur le bouton ; le dialogue est passé
 >   en `.pp-help-box` (le partage de classe bouton/dialogue était un bug CSS).
 > - **Cover ≥ 900 px** : 150 px.
 > - Le « restant au survol » se fait désormais au survol du temps total.
+
+> **Principe directeur (demande utilisateur) : sobre, simple, utilisable.**
+> - Un contrôle = une action ; rien de décoratif, pas de doublons visibles.
+> - Les éléments contextuels n'apparaissent que s'ils servent : groupe nav
+>   chapitres caché tant qu'aucun chapitre n'existe (1.6.9), chip de reprise
+>   caché sans position sauvegardée, panneaux repliés par défaut, marqueurs
+>   chapitres cliquables seulement en `pointer: fine`.
+> - Pas d'effet superflu (transitions courtes, zéro animation décorative).
+> - Chaque contrôle reste accessible clavier + lecteur d'écran
+>   (`aria-label`, `aria-pressed`, `aria-valuetext`).
+> - Un ajout futur doit d'abord justifier sa place dans la hiérarchie
+>   (transport > toolbar > panneau) ; en cas de doute, on ne l'ajoute pas.
 
 Version analysée : player v2 (1.5.0) · Date : 2026-08 · Site : sn
 
