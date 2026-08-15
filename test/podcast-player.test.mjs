@@ -20,7 +20,7 @@ const PAGE_HTML = `<!doctype html><html><head></head><body>
 
 function boot(html, opts) {
   opts = opts || {};
-  const { overrides, mediaSession, mediaMetadata, serviceWorker, localStorage: seedStorage } = opts;
+  const { overrides, mediaSession, mediaMetadata, serviceWorker, swProbe, localStorage: seedStorage } = opts;
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
@@ -47,6 +47,10 @@ function boot(html, opts) {
   }
   // No real HLS engine in jsdom: leave window.Hls undefined.
   window.fetch = async (u) => {
+    if (String(u).endsWith('sw.js')) {
+      // SW auto-detect probe (HEAD): ok only when the test opts in.
+      return { ok: swProbe === 'ok', status: swProbe === 'ok' ? 200 : 404 };
+    }
     if (String(u).endsWith('.json')) {
       // Podcast Index v1.2.0 wrapped format (what balado now emits).
       return { ok: true, json: async () => ({
@@ -742,4 +746,68 @@ test('v2: volume persists to localStorage and restores on boot', () => {
   const audio2 = w2.document.querySelector('audio');
   assert.equal(audio2.volume, 0.5, 'volume restored from localStorage');
   assert.equal(w2.document.querySelector('.pp-volume-range').value, '50');
+});
+
+// ── v2: service-worker self-registration (download synthesis) ────────
+
+function makeSwFake() {
+  return {
+    registered: [],
+    updateCalls: 0,
+    register(url) {
+      this.registered.push(url);
+      return Promise.resolve({ update: () => { this.updateCalls++; } });
+    },
+  };
+}
+
+test('v2: auto-detects and registers sw.js at the site root (version-pinned)', async () => {
+  const sw = makeSwFake();
+  const w = boot(PAGE_HTML, { serviceWorker: sw, swProbe: 'ok' });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sw.registered.length, 1, 'registered once');
+  const url = sw.registered[0];
+  assert.equal(url, '/sw.js?v=1.4.0', 'registered at site root, version-pinned');
+  assert.equal(sw.updateCalls, 1, 'update() called after registration');
+});
+
+test('v2: skips registration when the sw.js probe fails', async () => {
+  const sw = makeSwFake();
+  const w = boot(PAGE_HTML, { serviceWorker: sw }); // probe → 404
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sw.registered.length, 0, 'no registration without sw.js');
+});
+
+test('v2: explicit downloadSw path registers without a probe', async () => {
+  const sw = makeSwFake();
+  const w = boot(PAGE_HTML, {
+    overrides: { podcastPlayer: { downloadSw: 'assets/sw.js' } },
+    serviceWorker: sw,
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sw.registered.length, 1);
+  assert.match(sw.registered[0], /assets\/sw\.js\?v=1\.4\.0$/);
+});
+
+test('v2: downloadSw:false disables registration', async () => {
+  const sw = makeSwFake();
+  const w = boot(PAGE_HTML, {
+    overrides: { podcastPlayer: { downloadSw: false } },
+    serviceWorker: sw, swProbe: 'ok',
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sw.registered.length, 0);
+});
+
+test('v2: registers at most once per page even with several players', async () => {
+  const html = `<!doctype html><html><head></head><body>
+    <div class="markdown-section">
+      <audio controls src="a.m3u8"></audio>
+      <audio controls src="b.m3u8"></audio>
+    </div>
+  </body></html>`;
+  const sw = makeSwFake();
+  const w = boot(html, { serviceWorker: sw, swProbe: 'ok' });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sw.registered.length, 1, 'one registration per page');
 });

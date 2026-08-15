@@ -44,6 +44,7 @@
  *     backForward:      10,
  *     speedOptions:     [0.75, 1, 1.25, 1.5, 2],
  *     print:            'hide',          // 'hide' | 'keep-title'
+ *     downloadSw:       true,            // SW download synthesis (see README)
  *     labels:           { ... },         // FR by default, EN fallback
  *     … (all v1 options still supported)
  *   };
@@ -51,6 +52,10 @@
  */
 (function () {
   'use strict';
+
+  // Plugin release — version-pins the service worker script URL (?v=) so
+  // browsers force an SW update as soon as a new release ships.
+  var PLUGIN_VERSION = '1.4.0';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -95,6 +100,8 @@
     helpDialog: true,
     resumeChip: true,
     print: 'hide',                    // 'hide' | 'keep-title'
+    downloadSw: true,                 // true=auto-detect 'sw.js' at site
+                                     // root, false=off, string=explicit path
     labels: null,                     // FR by default, EN fallback
   };
 
@@ -1958,6 +1965,55 @@
     document.head.appendChild(style);
   }
 
+  // ── Service worker (download synthesis) ─────────────────────────────
+
+  var swRegistered = false;
+
+  // Site root URL (with trailing slash) — where sw.js lives.
+  function siteRootUrl() {
+    var bp = window.$docsify && window.$docsify.basePath;
+    if (bp && /^https?:\/\//.test(String(bp))) return String(bp).replace(/\/?$/, '/');
+    if (bp && bp !== '/') return String(bp).replace(/^\/?(.*?)\/?$/, '/$1/');
+    return location.pathname.replace(/[^/]*$/, '');
+  }
+
+  function probeSw(root, path) {
+    return fetch(root + path, { method: 'HEAD', cache: 'no-store' })
+      .then(function (r) { return r.ok; })
+      .catch(function () { return false; });
+  }
+
+  // Register the download-synthesis service worker once per page. The SW
+  // script must be same-origin (spec constraint), so the site serves it at
+  // its root; the plugin only wires up the registration — no dedicated
+  // script needed in index.html. ?v=<version> pins the script URL so a new
+  // plugin release automatically forces an SW update in browsers.
+  function registerDownloadSw() {
+    if (swRegistered) return;
+    if (!settings.downloadSw) return;
+    if (!('serviceWorker' in navigator)) return;
+    swRegistered = true; // attempt once per page load
+    var root = siteRootUrl();
+    var path = settings.downloadSw === true ? 'sw.js' : String(settings.downloadSw);
+    var doRegister = function () {
+      navigator.serviceWorker.register(root + path + '?v=' + PLUGIN_VERSION)
+        .then(function (r) { if (r && r.update) r.update(); })
+        .catch(function () { /* main-thread remux fallback still works */ });
+    };
+    if (settings.downloadSw === true) {
+      var cached = null;
+      try { cached = sessionStorage.getItem('pp-sw-probe'); } catch (_) { /* ignore */ }
+      if (cached === '1') { doRegister(); return; }
+      if (cached === '0') return;
+      probeSw(root, path).then(function (ok) {
+        try { sessionStorage.setItem('pp-sw-probe', ok ? '1' : '0'); } catch (_) { /* ignore */ }
+        if (ok) doRegister();
+      });
+    } else {
+      doRegister();
+    }
+  }
+
   // ── Docsify plugin ──────────────────────────────────────────────────
 
   function plugin(hook) {
@@ -1972,6 +2028,8 @@
       playlist.forEach(function (entry, i) { enhance(entry.el, i); });
 
       root.querySelectorAll('video').forEach(attachHls);
+
+      registerDownloadSw();
     });
   }
 
@@ -2022,6 +2080,7 @@
       transcriptSearch: user.transcriptSearch !== undefined ? user.transcriptSearch : DEFAULTS.transcriptSearch,
       helpDialog: user.helpDialog !== undefined ? user.helpDialog : DEFAULTS.helpDialog,
       resumeChip: user.resumeChip !== undefined ? user.resumeChip : DEFAULTS.resumeChip,
+      downloadSw: user.downloadSw !== undefined ? user.downloadSw : DEFAULTS.downloadSw,
       print: user.print || DEFAULTS.print,
       labels: labels,
     };

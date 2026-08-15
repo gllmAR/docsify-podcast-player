@@ -96,20 +96,28 @@ actually downloads depends on what answers that URL:
    main thread (lazy-loads `ts2m4a.js` from `ts2m4aCdn`), downloading a
    blob. Copy-link still yields the real URL.
 
-Register the SW once in `index.html` (after the docsify config):
+### The plugin registers the service worker — no script needed in your site
 
-```html
-<script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register(
-      (window.$docsify && window.$docsify.basePath || '/') + 'sw.js'
-    ).then(function (r) { r.update(); });
-  }
-</script>
-```
+The player registers `sw.js` itself (once per page, `?v=<release>`
+version-pinned so a new release forces an SW update in browsers). No
+dedicated `<script>` block is required in `index.html`.
 
-The only file to track in your site is `sw.js` (copy it from this repo;
-`ts2m4a` is imported from the CDN, no vendored copy).
+The one constraint: a service worker script must be **same-origin with the
+site** (the spec forbids cross-origin registration, and scope is bounded by
+the script's path). So the site must *serve* `sw.js` at its root — it just
+doesn't have to *write any code* for it:
+
+- **Serve the upstream copy** (recommended): download
+  `https://gllmar.github.io/docsify-podcast-player/sw.js` into your site
+  root at build time (e.g. a `vendor` step), or copy it once. It contains
+  no site-specific paths.
+- **Configuration** (all optional):
+  - `downloadSw: true` (default) — auto-detect: probe `HEAD sw.js` at the
+    site root once per session; register only if present.
+  - `downloadSw: 'assets/sw.js'` — register an explicit path (no probe).
+  - `downloadSw: false` — never register (main-thread fallback only).
+
+`ts2m4a` is imported from the CDN inside `sw.js` (no vendored copy).
 
 Route mapping (`ts2m4a.handleM4aRequest`):
 
