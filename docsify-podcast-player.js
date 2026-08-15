@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.11';
+  var PLUGIN_VERSION = '1.6.12';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -137,6 +137,7 @@
       bookmarkDelete: 'Supprimer le signet à {t}',
       bookmarkEmpty: 'Aucun signet pour cet épisode.',
       global: 'Lecteur',
+      closeMini: 'Fermer le lecteur', openMini: 'Rouvrir le lecteur',
       help: 'Raccourcis clavier', closeHelp: 'Fermer',
       error: 'Erreur', retry: 'Réessayer',
       nowPlaying: 'En lecture', title: 'Épisode',
@@ -171,6 +172,7 @@
       bookmarkDelete: 'Delete bookmark at {t}',
       bookmarkEmpty: 'No bookmarks for this episode.',
       global: 'Player',
+      closeMini: 'Close player', openMini: 'Reopen player',
       help: 'Keyboard shortcuts', closeHelp: 'Close',
       error: 'Error', retry: 'Retry',
       nowPlaying: 'Now playing', title: 'Episode',
@@ -2357,6 +2359,17 @@
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
       'body.pp-has-global { padding-bottom: 64px; }',
+      '.pp-global-reopen { position: fixed; right: 1em;',
+      '  bottom: calc(1em + env(safe-area-inset-bottom)); z-index: 9001;',
+      '  width: 56px; height: 56px; min-width: 56px; min-height: 56px; padding: 0;',
+      '  border-radius: 50%; overflow: hidden; background: var(--pp-bg);',
+      '  border: 1px solid var(--pp-border); box-shadow: var(--pp-shadow); }',
+      '.pp-global-reopen[hidden] { display: none; }',
+      '.pp-global-reopen-cover { position: absolute; inset: 0; width: 100%;',
+      '  height: 100%; object-fit: cover; }',
+      '.pp-global-reopen-icon { position: absolute; inset: 0; display: flex;',
+      '  align-items: center; justify-content: center; color: #fff;',
+      '  text-shadow: 0 1px 3px rgb(0 0 0 / .6); }',
       '@media (max-width: 559px) {',
       '  body.pp-has-global { padding-bottom: 72px; }',
       '  .pp-global-cover { width: 38px; height: 38px; }',
@@ -2485,6 +2498,7 @@
   var gLoadedSrc = ''; // source currently loaded in the global player
   var gLoadedRoute = ''; // docsify route where the current source lives
   var gSurfaces = [];  // live page-surface sync functions (pruned on enhance)
+  var gReopenBtn = null; // floating "reopen the persistent bar" button
 
   function ensureGlobalPlayer() {
     if (gAudio) return;
@@ -2573,17 +2587,29 @@
       gAudio.pause();
       gWrap.hidden = true;
       document.body.classList.remove('pp-has-global');
+      updateReopenButton();
     });
     scrub.addEventListener('input', function () {
       gAudio.currentTime = parseFloat(scrub.value) || 0;
       syncGlobalBar();
     });
 
-    gAudio.addEventListener('play', function () { syncGlobalPlayUI(true); });
-    gAudio.addEventListener('pause', function () { syncGlobalPlayUI(false); });
+    function syncSurfaces(playing) {
+      gSurfaces.forEach(function (s) { try { s(playing); } catch (_) { /* ignore */ } });
+    }
+    gAudio.addEventListener('play', function () {
+      syncGlobalPlayUI(true);
+      syncSurfaces(true);
+      showGlobalBar(); // reappear if the user closed the bar
+    });
+    gAudio.addEventListener('pause', function () {
+      syncGlobalPlayUI(false);
+      syncSurfaces(false);
+    });
     gAudio.addEventListener('ended', function () {
       clearPosition(gAudio);
       syncGlobalPlayUI(false);
+      syncSurfaces(false);
       autoAdvanceNext();
     });
     gAudio.addEventListener('loadedmetadata', function () {
@@ -2610,7 +2636,53 @@
     gWrap.hidden = true;
     ensureLiveRegion(gWrap);
     document.body.appendChild(gWrap);
+
+    // Floating "reopen player" button: the persistent bar can be closed
+    // (close keeps the audio playing) and brought back at any time.
+    var reopen = document.createElement('button');
+    reopen.type = 'button';
+    reopen.className = 'podcast-player-btn pp-global-reopen';
+    reopen.setAttribute('aria-label', settings.labels.openMini);
+    reopen.hidden = true;
+    var rImg = document.createElement('img');
+    rImg.className = 'pp-global-reopen-cover';
+    rImg.alt = '';
+    reopen.appendChild(rImg);
+    var rIcon = document.createElement('span');
+    rIcon.className = 'pp-global-reopen-icon';
+    rIcon.appendChild(icon('play'));
+    reopen.appendChild(rIcon);
+    reopen.addEventListener('click', function () {
+      showGlobalBar();
+      updateReopenButton();
+    });
+    document.body.appendChild(reopen);
+    gReopenBtn = reopen;
     loadFeed();
+  }
+
+  // Show the persistent bar (also from the floating reopen button); the
+  // reopen button hides whenever the bar is visible.
+  function showGlobalBar() {
+    gWrap.hidden = false;
+    document.body.classList.add('pp-has-global');
+    if (gReopenBtn) gReopenBtn.hidden = true;
+  }
+
+  // The floating reopen button appears only when the bar was closed while
+  // an episode is still loaded.
+  function updateReopenButton() {
+    if (!gReopenBtn) return;
+    var loaded = gAudio && gAudio.getAttribute('src');
+    if (gWrap.hidden && loaded) {
+      gReopenBtn.hidden = false;
+      var img = gReopenBtn.querySelector('.pp-global-reopen-cover');
+      if (img && gAudio._coverUrl && img.getAttribute('src') !== gAudio._coverUrl) {
+        img.src = gAudio._coverUrl;
+      }
+    } else {
+      gReopenBtn.hidden = true;
+    }
   }
 
   function timeParam() {
@@ -2855,8 +2927,7 @@
     } catch (_) { /* ignore */ }
     attachHls(gAudio);
     updateMediaSession(gAudio, -1);
-    gWrap.hidden = false;
-    document.body.classList.add('pp-has-global');
+    showGlobalBar();
     syncGlobalBar();
     syncGlobalPlayUI();
     gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
@@ -2874,15 +2945,14 @@
       var stem = audioStem(sourceEl);
       if (stem) coverUrl = resolve(settings.coverPattern.replace('{stem}', stem));
     }
-    if (adoptGlobalSource({
+    // Triggering playback never changes the page interface: the compact
+    // surface stays, the persistent bar takes over the interaction.
+    adoptGlobalSource({
       src: src,
       route: window.location.hash || '',
       data: data,
       coverUrl: coverUrl,
-    })) {
-      // Upgrade the source's page surface into the full player (Phase 2).
-      reEnhance(sourceEl);
-    }
+    });
   }
 
   // Rebuild a page <audio>'s UI according to the global state: full player
@@ -2986,6 +3056,7 @@
     play.addEventListener('click', function () {
       var src = el.getAttribute('src') || el.dataset.originalSrc || '';
       if (!src) return;
+      showGlobalBar();
       if (globalIsCurrent(el)) {
         if (gAudio.paused) playMedia(gAudio); else gAudio.pause();
       } else {
@@ -3029,9 +3100,6 @@
         bTitle.textContent = gAudio.dataset.title || '';
       }
     }
-    bindMedia(gAudio, 'play', function () { syncSurface(true); });
-    bindMedia(gAudio, 'pause', function () { syncSurface(false); });
-    bindMedia(gAudio, 'ended', function () { syncSurface(false); });
     syncSurface._el = wrap;
     gSurfaces = gSurfaces.filter(function (s) {
       return s._el && s._el.isConnected;

@@ -1218,7 +1218,7 @@ test('unified: one persistent global player in body, surfaces on the page', () =
   assert.ok(globals[0].querySelector('.pp-global-bar'), 'global bar present');
 });
 
-test('unified: surface play loads the episode into the global player', async () => {
+test('unified: surface play loads the episode into the global player, page unchanged', async () => {
   const w = bootUnified();
   const play = w.document.querySelector('.pp-surface .pp-btn-play');
   play.click();
@@ -1229,10 +1229,13 @@ test('unified: surface play loads the episode into the global player', async () 
   assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
   const gTitle = w.document.querySelector('.pp-global-title');
   assert.equal(gTitle.textContent, 'Épisode 1');
-  // Play event → pause UI on the bar and the (upgraded) full player.
+  // Triggering playback never changes the page interface.
+  assert.ok(w.document.querySelector('.pp-surface'), 'page keeps its compact surface');
+  assert.ok(!w.document.querySelector('.pp-controls'), 'no full player pushed into the page');
+  // Play event → pause UI on the bar AND on the page surface.
   fire(gAudio, 'play');
   assert.equal(w.document.querySelector('.pp-global-play').getAttribute('aria-label'), 'Pause');
-  assert.equal(w.document.querySelector('.pp-controls .pp-btn-play').getAttribute('aria-label'), 'Pause');
+  assert.equal(w.document.querySelector('.pp-surface .pp-btn-play').getAttribute('aria-label'), 'Pause');
 });
 
 test('unified: navigation keeps playing; new episode page shows a banner and switches', async () => {
@@ -1253,12 +1256,38 @@ test('unified: navigation keeps playing; new episode page shows a banner and swi
   assert.equal(banner.hidden, false, 'now-playing banner shown');
   assert.equal(banner.querySelector('.pp-now-playing-title').textContent, 'Épisode 1');
   assert.ok(banner.querySelector('.pp-goto'), 'go-to-page link in the banner');
-  // Surface of B: play switches the global source and upgrades the page.
+  // Surface of B: play switches the global source, page stays compact.
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(gAudio.getAttribute('src').indexOf('ep2.m3u8') !== -1, 'switched to episode B');
-  assert.ok(w.document.querySelector('.pp-controls'), 'B page upgraded to the full player');
-  assert.ok(!w.document.querySelector('.pp-now-playing'), 'banner gone after switch');
+  assert.ok(w.document.querySelector('.pp-surface'), 'B page keeps its compact surface');
+  assert.ok(!w.document.querySelector('.pp-controls'), 'no full player on B');
+  const banner2 = w.document.querySelector('.pp-now-playing');
+  assert.ok(banner2 && banner2.hidden, 'banner hidden after switch');
+});
+
+test('unified: the persistent bar hides (close) and reappears (reopen button / play)', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const bar = w.document.querySelector('.pp-global');
+  assert.equal(bar.hidden, false, 'bar visible after play');
+  bar.querySelector('.pp-global-close').click();
+  assert.equal(bar.hidden, true, 'bar hides on close');
+  assert.ok(!w.document.body.classList.contains('pp-has-global'),
+    'body padding removed while hidden');
+  const reopen = w.document.querySelector('.pp-global-reopen');
+  assert.ok(reopen, 'floating reopen button exists');
+  assert.equal(reopen.hidden, false, 'reopen button appears when the bar is closed');
+  // Reappear via the floating button.
+  reopen.click();
+  assert.equal(bar.hidden, false, 'bar reappears on reopen');
+  assert.equal(reopen.hidden, true, 'reopen button hides while the bar is visible');
+  // Reappear via a surface play interaction.
+  bar.querySelector('.pp-global-close').click();
+  assert.equal(bar.hidden, true, 'bar hidden again');
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  assert.equal(bar.hidden, false, 'playing from the surface brings the bar back');
 });
 
 test('unified: resume chip loads the saved position into the global player', async () => {
@@ -1284,20 +1313,27 @@ test('unified: same-source play toggles pause instead of reloading', async () =>
   assert.equal(gAudio.getAttribute('src'), src, 'source not reloaded on toggle');
 });
 
-test('unified: the page of the loaded episode upgrades to the full player', async () => {
+test('unified: playing from a surface never changes the page interface', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
-  assert.ok(w.document.querySelector('.pp-controls'), 'full controls in the page');
-  assert.ok(w.document.querySelector('.pp-panels'), 'chapters/transcript panels in the page');
-  assert.ok(!w.document.querySelector('.pp-surface'), 'compact surface replaced');
+  assert.ok(w.document.querySelector('.pp-surface'), 'page keeps the compact surface');
+  assert.ok(!w.document.querySelector('.pp-controls'), 'no full player in the page');
+  assert.ok(!w.document.querySelector('.pp-panels'), 'no panels in the page');
   assert.ok(w.document.querySelector('.pp-global audio'), 'global audio still in body');
-  assert.ok(w.document.querySelector('.pp-global-bar'), 'bottom bar still present');
+  assert.ok(w.document.querySelector('.pp-global-bar'), 'persistent bottom bar present');
+  assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
 });
 
 test('unified: full-player chapter click seeks the global audio', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  // The full player (with panels) appears when arriving on the playing
+  // episode's page — navigation, not the play trigger.
+  const section = w.document.querySelector('.markdown-section');
+  section.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
   await new Promise((r) => setTimeout(r, 30)); // chapters fetch resolves
   const gAudio = w.document.querySelector('.pp-global audio');
   let t = 0;
@@ -1313,6 +1349,11 @@ test('unified: full-player chapter click seeks the global audio', async () => {
 test('unified: bound listeners do not accumulate across navigations', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  // Establish the full-player baseline: arrive on the playing episode page.
+  const section0 = w.document.querySelector('.markdown-section');
+  section0.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
   await new Promise((r) => setTimeout(r, 20));
   const gAudio = w.document.querySelector('.pp-global audio');
   let net = 0;
@@ -1376,7 +1417,11 @@ test('unified: first play retries automatically once the media is ready', async 
 test('unified: full-player play button retries when not ready yet', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
-  await new Promise((r) => setTimeout(r, 20)); // page upgrades to the full player
+  await new Promise((r) => setTimeout(r, 20));
+  const section = w.document.querySelector('.markdown-section');
+  section.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+  await new Promise((r) => setTimeout(r, 20)); // full player on the episode page
   const gAudio = w.document.querySelector('.pp-global audio');
   let plays = 0;
   gAudio.play = () => { plays++; return Promise.reject(new Error('NotSupportedError')); };

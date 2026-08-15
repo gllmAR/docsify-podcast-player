@@ -101,6 +101,18 @@ jusque-là)
 `(el, index, mediaEl)` — l'UI complète se lie à l'audio global ;
 `reEnhance()` fait monter la surface en lecteur plein à la bascule ;
 bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
+
+> **Évolution 1.6.12 — le déclenchement ne change plus la page.** Le clic
+> play sur une surface **ne monte plus** la surface en lecteur plein : la
+> page garde son interface compacte, l'interaction passe à la barre
+> persistante. Le lecteur plein (panneaux chapitres/transcript/signets)
+> n'apparaît que **par navigation** sur la page de l'épisode joué
+> (`doneEach` → `enhance(el, i, gAudio)`), y compris via autoAdvance ou le
+> lien « Aller à la page ». La synchro des surfaces est centralisée sur les
+> listeners globaux (plus aucun listener par surface → pas d'accumulation).
+> La barre persistante se **masque** (close) et **réapparaît** : bouton
+> flottant `pp-global-reopen` (56 px, cover + play) tant qu'un épisode est
+> chargé, et tout déclenchement de lecture la rouvre (`showGlobalBar()`).
 - Les `<audio>` de page deviennent des contrôleurs : clic play →
   `global.load(descriptor)` + `play()` ; état du bouton synchronisé
   (`aria-label`, icône) ; time display de la page reflète le global
