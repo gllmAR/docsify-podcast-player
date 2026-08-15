@@ -1358,6 +1358,36 @@ test('unified: no double player — native audio hidden inside the surface', () 
     'exactly one player UI on the page');
 });
 
+test('unified: first play retries automatically once the media is ready', async () => {
+  const w = bootUnified();
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let plays = 0;
+  // Simulates Chrome before hls.js has attached its MediaSource: the
+  // in-gesture play() rejects (src is still the raw .m3u8).
+  gAudio.play = () => { plays++; return Promise.reject(new Error('NotSupportedError')); };
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(plays, 1, 'first attempt happens inside the gesture');
+  fire(gAudio, 'loadedmetadata');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(plays, 2, 'play retried automatically once the media is ready');
+});
+
+test('unified: full-player play button retries when not ready yet', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20)); // page upgrades to the full player
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let plays = 0;
+  gAudio.play = () => { plays++; return Promise.reject(new Error('NotSupportedError')); };
+  w.document.querySelector('.pp-controls .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(plays, 1);
+  fire(gAudio, 'loadedmetadata');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(plays, 2);
+});
+
 // ── unified: feed catalog (feed.json / RSS fallback) ────────────────
 
 test('unified: feed.json enables next/prev in the bar and loads neighbors', async () => {

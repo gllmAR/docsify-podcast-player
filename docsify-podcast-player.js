@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.10';
+  var PLUGIN_VERSION = '1.6.11';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -318,7 +318,13 @@
       hls.attachMedia(el);
       el._hls = hls;
       el.dataset.hlsAttached = '1';
-      hls.on(Hls.Events.MANIFEST_PARSED, function () { hideHlsLoading(wrap); });
+      hls.on(Hls.Events.MANIFEST_PARSED, function () {
+        hideHlsLoading(wrap);
+        // A play was requested before the MediaSource was attached: retry
+        // now that the manifest is parsed (the element keeps its gesture
+        // activation from the first attempt).
+        if (el._playPending) playMedia(el);
+      });
       hls.on(Hls.Events.ERROR, function (_evt, data) {
         if (!data.fatal) return;
         hideHlsLoading(wrap);
@@ -468,7 +474,7 @@
         a.setAttribute('aria-label', ch.title || ('Chapitre ' + (i + 1)));
         a.addEventListener('click', function () {
           media.currentTime = parseFloat(ch.startTime || 0);
-          media.play();
+          playMedia(media);
           announce(wrap, tpl(settings.labels.cueAt, { t: formatTime(ch.startTime || 0) }));
         });
         li.appendChild(a);
@@ -871,7 +877,7 @@
     play.appendChild(icon('play'));
     media._playBtn = play;
     play.addEventListener('click', function () {
-      if (media.paused) media.play(); else media.pause();
+      if (media.paused) playMedia(media); else media.pause();
     });
     navGroup.appendChild(play);
 
@@ -1127,12 +1133,51 @@
     }
     if (target < 0 || target >= chapters.length) return;
     media.currentTime = parseFloat(chapters[target].startTime) || 0;
-    media.play();
+    playMedia(media);
     announce(wrapFor(media), tpl(settings.labels.cueAt, { t: formatTime(media.currentTime) }));
   }
 
   function wrapFor(media) {
     return media.closest('.podcast-player') || document.body;
+  }
+
+  // Play an element robustly. The first attempt runs inside the user
+  // gesture; when it fails because the media is not playable yet (hls.js
+  // still loading/attaching its MediaSource, or no metadata), the play is
+  // retried automatically as soon as the element becomes ready — the
+  // element keeps the gesture activation from the first attempt, so the
+  // retry is allowed by the autoplay policy. Fixes the "first play does
+  // nothing, second press works" race with async hls.js attachment.
+  function playMedia(el) {
+    if (el._playPending) return;           // a retry is already armed
+    el._playPending = true;
+    var p;
+    try { p = el.play(); } catch (_) { p = null; }
+    if (!p || !p.catch) { el._playPending = false; return; } // sync env (jsdom)
+    p.then(function () { el._playPending = false; },
+           function () { /* rejection handled by the retry below */ });
+    p.catch(function () {
+      if (!el._playPending) return;
+      var retry = function () {
+        if (!el._playPending) return;
+        var p2;
+        try { p2 = el.play(); } catch (_) { p2 = null; }
+        if (p2 && p2.catch) {
+          // Give the next gesture a fresh attempt if this retry also fails.
+          p2.catch(function () { el._playPending = false; });
+        } else {
+          el._playPending = false;
+        }
+      };
+      if (el.readyState >= 2) { retry(); return; }
+      var once = function () {
+        el.removeEventListener('loadedmetadata', once);
+        el.removeEventListener('canplay', once);
+        retry();
+      };
+      el.addEventListener('loadedmetadata', once);
+      el.addEventListener('canplay', once);
+    });
   }
 
   // Decorative hover interactions only on precise-pointer devices.
@@ -1164,8 +1209,7 @@
       m.title = ch.title || ('Chapitre ' + (i + 1));
       m.addEventListener('click', function () {
         media.currentTime = start;
-        var p = media.play();
-        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        playMedia(media);
         announce(wrapFor(media), tpl(settings.labels.cueAt, { t: formatTime(start) }));
       });
       ticks.appendChild(m);
@@ -1440,7 +1484,7 @@
     mediaSessionReady = true;
     try {
       navigator.mediaSession.setActionHandler('play', function () {
-        if (activeAudio) activeAudio.play();
+        if (activeAudio) playMedia(activeAudio);
         else if (playlist.length) goTo(0, true);
       });
       navigator.mediaSession.setActionHandler('pause', function () {
@@ -1569,8 +1613,7 @@
       catch (_) { target.el.scrollIntoView(); }
     }
     if (autoplay) {
-      var p = target.el.play();
-      if (p && p.catch) p.catch(function () { /* autoplay blocked — fine */ });
+      playMedia(target.el);
     }
   }
 
@@ -1651,7 +1694,7 @@
       switch (e.code) {
         case 'Space':
           e.preventDefault();
-          if (el.paused) el.play(); else el.pause();
+          if (el.paused) playMedia(el); else el.pause();
           break;
         case 'ArrowLeft':
           e.preventDefault();
@@ -1836,8 +1879,7 @@
       go.setAttribute('aria-label', tpl(settings.labels.cueAt, { t: formatTime(b.t) }));
       go.addEventListener('click', function () {
         media.currentTime = b.t;
-        var p = media.play();
-        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        playMedia(media);
       });
       var del = document.createElement('button');
       del.type = 'button';
@@ -1941,8 +1983,7 @@
       chip.hidden = true;
       chip.addEventListener('click', function () {
         media.currentTime = media._resumeAt || 0;
-        var p = media.play();
-        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        playMedia(media);
         chip.hidden = true;
       });
       media._resumeChip = chip;
@@ -1980,8 +2021,7 @@
       try {
         if (sessionStorage.getItem('podcast-autoplay') === '1') {
           sessionStorage.removeItem('podcast-autoplay');
-          var p = media.play();
-          if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+          playMedia(media);
         }
       } catch (_) { /* ignore */ }
     }, { once: true });
@@ -2517,16 +2557,14 @@
     bar.appendChild(close);
 
     play.addEventListener('click', function () {
-      if (gAudio.paused) { var p = gAudio.play(); if (p && p.catch) p.catch(function () {}); }
-      else gAudio.pause();
+      if (gAudio.paused) playMedia(gAudio); else gAudio.pause();
     });
     var feedJump = function (dir) {
       loadFeed().then(function () {
         var entry = neighborEntry(dir);
         if (!entry) return;
         globalLoadEntry(entry);
-        var p = gAudio.play();
-        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+        playMedia(gAudio);
       });
     };
     navPrev.addEventListener('click', function () { feedJump(-1); });
@@ -2555,8 +2593,7 @@
         gAudio.currentTime = Math.min(t, isFinite(gAudio.duration) ? gAudio.duration : t);
         try {
           if (/[?&]autoplay=1/.test(window.location.hash)) {
-            var p = gAudio.play();
-            if (p && p.catch) p.catch(function () { /* blocked */ });
+            playMedia(gAudio);
           }
         } catch (_) { /* ignore */ }
       }
@@ -2595,8 +2632,7 @@
       if (!entry) return;
       announce(gWrap, tpl(settings.labels.nextEpAnnounce, { t: entry.title }));
       globalLoadEntry(entry);
-      var p = gAudio.play();
-      if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+      playMedia(gAudio);
       if (entry.pageUrl && gFeed && gFeed.series && gFeed.series.baseUrl) {
         var base = gFeed.series.baseUrl.replace(/\/$/, '');
         if (entry.pageUrl.indexOf(base) === 0) {
@@ -2951,12 +2987,10 @@
       var src = el.getAttribute('src') || el.dataset.originalSrc || '';
       if (!src) return;
       if (globalIsCurrent(el)) {
-        if (gAudio.paused) { var p = gAudio.play(); if (p && p.catch) p.catch(function () {}); }
-        else gAudio.pause();
+        if (gAudio.paused) playMedia(gAudio); else gAudio.pause();
       } else {
         globalLoad(el);
-        var p2 = gAudio.play();
-        if (p2 && p2.catch) p2.catch(function () { /* autoplay blocked */ });
+        playMedia(gAudio);
       }
     });
     controls.appendChild(play);
@@ -2970,8 +3004,7 @@
       chip.addEventListener('click', function () {
         globalLoad(el);
         gAudio.currentTime = el._resumeAt || 0;
-        var p = gAudio.play();
-        if (p && p.catch) p.catch(function () {});
+        playMedia(gAudio);
       });
       controls.appendChild(chip);
       var saved = readPosition(el);

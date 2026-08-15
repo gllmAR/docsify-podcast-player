@@ -168,3 +168,14 @@ padding body quand la barre est visible, mini-player supprimé (1.6.5)
   site) — cohérent avec le layout v3 (audit UI).
 - La reprise inter-visites (1.5.0) reste : le global reprend la position
   sauvegardée de l'épisode chargé.
+
+## 9. Correctif — premier appui play (1.6.11)
+
+Race Chrome/Firefox + hls.js : le premier appui appelait `play()` avant que
+hls.js (chargé en async) n'ait attaché son MediaSource — l'élément portait
+encore le `.m3u8` brut, la promesse rejetait silencieusement, et il fallait
+réappuyer. `playMedia()` (utilisé par tous les chemins de lecture : surface,
+barre globale, grand lecteur, chapitres, reprise, autoplay, MediaSession,
+clavier) tente le play dans le geste, puis **réessaie automatiquement** dès
+que le media est prêt (`loadedmetadata`/`canplay`, ou `MANIFEST_PARSED` de
+hls.js) — l'élément garde l'activation de geste du premier essai.
