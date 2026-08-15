@@ -111,7 +111,10 @@ bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 - Tests : deux `doneEach` simulés (navigation), bascule A→B, reprise d'état
   en revenant sur la page de A.
 
-### Phase 3 — Cohabitation mini-player / barre globale
+### Phase 3 — Cohabitation mini-player / barre globale — ✅ livré (1.6.2)
+(listeners liés tracés par `bindMedia` + nettoyés au rebind (pas
+d'accumulation), retour sur la page de l'épisode joué → lecteur plein,
+padding body quand la barre est visible, mini-player ignoré en unifié)
 - `unified: true` → la barre compacte `.pp-global-bar` **remplace** le
   mini-player (le `miniPlayer` existant reste pour le mode non-unifié).
 - Safe-area (`env(safe-area-inset-bottom)`), `position: fixed`, pas de

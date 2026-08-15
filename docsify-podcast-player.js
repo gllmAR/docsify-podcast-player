@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.1';
+  var PLUGIN_VERSION = '1.6.2';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -547,7 +547,7 @@
       });
     };
     loadFn();
-    media.addEventListener('timeupdate', function () {
+    bindMedia(media, 'timeupdate', function () {
       if (chapterDataCache[url]) {
         updateChapterPresentation(media, chapterDataCache[url], media.currentTime);
       }
@@ -778,7 +778,7 @@
     panels.appendChild(header);
     panels.appendChild(panel);
 
-    media.addEventListener('timeupdate', function () {
+    bindMedia(media, 'timeupdate', function () {
       if (panel.dataset.loaded && transcriptCache[tUrl]) {
         updateFollow(transcriptCache[tUrl], media.currentTime);
       }
@@ -1195,9 +1195,9 @@
       syncMini();
     }, { threshold: 0 });
     io.observe(wrap);
-    media.addEventListener('play', syncMini);
-    media.addEventListener('pause', syncMini);
-    media.addEventListener('ended', syncMini);
+    bindMedia(media, 'play', syncMini);
+    bindMedia(media, 'pause', syncMini);
+    bindMedia(media, 'ended', syncMini);
 
     function syncMini() {
       var playing = !media.paused && !media.ended;
@@ -1736,6 +1736,7 @@
     // element stays as the source descriptor (src/dataset). Non-unified:
     // media === el (unchanged behaviour).
     var media = mediaEl || el;
+    if (media !== el) cleanupMediaListeners(media);
     var wrap = document.createElement('div');
     wrap.className = 'podcast-player';
     wrap.dataset.print = settings.print || 'hide';
@@ -1780,7 +1781,7 @@
 
     wrap.appendChild(el);
 
-    media.addEventListener('loadedmetadata', function () {
+    bindMedia(media, 'loadedmetadata', function () {
       restorePosition(media);
       updatePositionState(media);
       if (settings.resumeChip && el._resumeChip) {
@@ -1799,35 +1800,35 @@
         }
       } catch (_) { /* ignore */ }
     }, { once: true });
-    media.addEventListener('timeupdate', function () {
+    bindMedia(media, 'timeupdate', function () {
       savePosition(media);
       updatePositionState(media);
       updateTimeDisplay(media);
     });
-    media.addEventListener('durationchange', function () {
+    bindMedia(media, 'durationchange', function () {
       updatePositionState(media);
       updateTimeDisplay(media);
     });
-    media.addEventListener('ratechange', function () { updatePositionState(media); });
-    media.addEventListener('seeked', function () {
+    bindMedia(media, 'ratechange', function () { updatePositionState(media); });
+    bindMedia(media, 'seeked', function () {
       updatePositionState(media);
       updateTimeDisplay(media);
     });
-    media.addEventListener('pause', function () {
+    bindMedia(media, 'pause', function () {
       savePosition(media);
       setPlaybackState('paused');
       syncPlayUI(media, false);
       wrap.classList.remove('pp-active');
       if (activeAudio === media) activeAudio = null;
     });
-    media.addEventListener('ended', function () {
+    bindMedia(media, 'ended', function () {
       setPlaybackState('paused');
       syncPlayUI(media, false);
       clearPosition(media);
       if (media._resumeChip) media._resumeChip.hidden = true;
     });
 
-    media.addEventListener('play', function () {
+    bindMedia(media, 'play', function () {
       activeAudio = media;
       attachHls(media);
       updateMediaSession(media, index);
@@ -2108,7 +2109,9 @@
       '  margin-top: .6em; font-size: .85em; color: var(--pp-text-muted); }',
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
+      'body.pp-has-global { padding-bottom: 64px; }',
       '@media (max-width: 559px) {',
+      '  body.pp-has-global { padding-bottom: 72px; }',
       '  .pp-global-cover { width: 38px; height: 38px; }',
       '  .pp-global-meta { flex-basis: 40%; }',
       '  .pp-global-time { display: none; }',
@@ -2202,6 +2205,24 @@
     }
   }
 
+  // Listeners bound to a shared media element (unified mode) are tracked
+  // per page and removed when the next page binds — they must not
+  // accumulate across docsify navigations.
+  function bindMedia(media, evt, fn) {
+    media.addEventListener(evt, fn);
+    if (media._ppCleanup) media._ppCleanup.push([evt, fn]);
+    else media._ppCleanup = [[evt, fn]];
+  }
+
+  function cleanupMediaListeners(media) {
+    var fns = media._ppCleanup;
+    if (!fns) return;
+    media._ppCleanup = null;
+    fns.forEach(function (pair) {
+      try { media.removeEventListener(pair[0], pair[1]); } catch (_) { /* ignore */ }
+    });
+  }
+
   // ── Unified player (persistent playback across navigation) ──────────
   // `unified: true` — a single persistent audio element lives in a fixed
   // bottom bar (never destroyed by docsify's page swaps). Page <audio>
@@ -2269,6 +2290,7 @@
     close.addEventListener('click', function () {
       gAudio.pause();
       gWrap.hidden = true;
+      document.body.classList.remove('pp-has-global');
     });
     scrub.addEventListener('input', function () {
       gAudio.currentTime = parseFloat(scrub.value) || 0;
@@ -2358,6 +2380,7 @@
     attachHls(gAudio);
     updateMediaSession(gAudio, -1);
     gWrap.hidden = false;
+    document.body.classList.add('pp-has-global');
     syncGlobalBar();
     syncGlobalPlayUI();
     gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
@@ -2503,9 +2526,9 @@
         bTitle.textContent = gAudio.dataset.title || '';
       }
     }
-    gAudio.addEventListener('play', function () { syncSurface(true); });
-    gAudio.addEventListener('pause', function () { syncSurface(false); });
-    gAudio.addEventListener('ended', function () { syncSurface(false); });
+    bindMedia(gAudio, 'play', function () { syncSurface(true); });
+    bindMedia(gAudio, 'pause', function () { syncSurface(false); });
+    bindMedia(gAudio, 'ended', function () { syncSurface(false); });
     syncSurface._el = wrap;
     gSurfaces = gSurfaces.filter(function (s) {
       return s._el && s._el.isConnected;
@@ -2526,8 +2549,12 @@
         playlist.push({ el: el });
       });
       playlist.forEach(function (entry, i) {
-        if (settings.unified) unifiedEnhance(entry.el, i);
-        else enhance(entry.el, i);
+        if (settings.unified) {
+          if (gLoadedSrc && globalIsCurrent(entry.el)) enhance(entry.el, i, gAudio);
+          else unifiedEnhance(entry.el, i);
+        } else {
+          enhance(entry.el, i);
+        }
       });
 
       root.querySelectorAll('video').forEach(attachHls);

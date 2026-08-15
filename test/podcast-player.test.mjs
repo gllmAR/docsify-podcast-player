@@ -1049,10 +1049,10 @@ test('unified: surface play loads the episode into the global player', async () 
   assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
   const gTitle = w.document.querySelector('.pp-global-title');
   assert.equal(gTitle.textContent, 'Épisode 1');
-  // Play event → pause UI on both the bar and the surface.
+  // Play event → pause UI on the bar and the (upgraded) full player.
   fire(gAudio, 'play');
   assert.equal(w.document.querySelector('.pp-global-play').getAttribute('aria-label'), 'Pause');
-  assert.equal(play.getAttribute('aria-label'), 'Pause');
+  assert.equal(w.document.querySelector('.pp-controls .pp-btn-play').getAttribute('aria-label'), 'Pause');
 });
 
 test('unified: navigation keeps playing; new episode page shows a banner and switches', async () => {
@@ -1128,4 +1128,42 @@ test('unified: full-player chapter click seeks the global audio', async () => {
   assert.ok(links.length >= 2, 'chapter buttons present in the full player');
   links[1].click(); // chapter at 30 s
   assert.equal(t, 30, 'chapter click seeks the global audio');
+});
+
+test('unified: bound listeners do not accumulate across navigations', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let net = 0;
+  const origAdd = gAudio.addEventListener.bind(gAudio);
+  const origRemove = gAudio.removeEventListener.bind(gAudio);
+  gAudio.addEventListener = (t, f) => { net++; origAdd(t, f); };
+  gAudio.removeEventListener = (t, f) => { net--; origRemove(t, f); };
+  const snapshot = net;
+
+  const section = w.document.querySelector('.markdown-section');
+  for (let i = 0; i < 2; i++) {
+    // Navigate to episode B (banner surface) …
+    section.innerHTML = '<audio controls preload="none" src="ep2.m3u8" data-title="Épisode 2"></audio>';
+    w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+    // … and back to episode A (full player rebinds after cleanup).
+    section.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
+    w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+  }
+  assert.equal(net, snapshot, 'listener count returns to the baseline after cleanup');
+});
+
+test('unified: returning to the playing episode page shows the full player', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const section = w.document.querySelector('.markdown-section');
+  section.innerHTML = '<audio controls preload="none" src="ep2.m3u8" data-title="Épisode 2"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+  assert.ok(w.document.querySelector('.pp-surface'), 'B shows a compact surface');
+  section.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+  assert.ok(w.document.querySelector('.pp-controls'), 'back on A: full player bound');
+  assert.ok(!w.document.querySelector('.pp-now-playing'), 'no banner on the playing page');
 });
