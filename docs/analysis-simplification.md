@@ -54,33 +54,27 @@ frontmatter OKF des épisodes (output_name, season, episode, date, lang)
 
 ## 4. Candidats de simplification restants (priorisés)
 
-### P1 — retirer `balado/rss.py` (RSS par épisode)
-- Écrit `{out_name}.xml` au build, **supprimé** par `build-all.sh` (artefact).
-- Le feed de site (docsh `podcast_feed`) le **remplace** : RSS 2.0 + itunes +
-  podcast, 30 épisodes, régénéré à chaque pass.
-- `PodcastConfig` reste (ses champs alimentent l'ilst MP4 : ©day/©grp/trkn).
-- Action : supprimer `write_rss` + l'appel dans `cli.py` + le nettoyage
-  `*.xml` de `build-all.sh` (balado — submodule).
-- Risque : balado utilisé en standalone ailleurs ? (repo perso — à confirmer).
+### P1 — retirer `balado/rss.py` — ✅ fait
+- `write_rss` + appel `cli.py` + flag `--no-rss` supprimés (balado
+  `acb02ae`) ; tests RSS retirés ; sn bump + nettoyage `*.xml` de
+  `build-all.sh` (`d697ac18`). `PodcastConfig` conservé (ilst MP4).
 
-### P2 — refactor frontmatter du bloc audio (étude `refactor-frontmatter-player.md`)
-- Les 30 blocs `<audio>` statiques deviennent un tag `start-replace-fm
-  format="podcast"` généré depuis `output_name`.
-- Simplifie la maintenance (renommage → régénération) et ajoute la
-  validation des assets au passage docsh.
+### P2 — refactor frontmatter du bloc audio — ✅ fait
+- docsh `title_block` mode `format="podcast"` (bloc depuis `output_name`,
+  srclang/label depuis `lang`, idempotent, stem vide → rien) ; poussé
+  upstream.
+- 30 README sn : blocs statiques enveloppés dans les tags
+  `start-replace-fm` (`54c4d7f6`) — diff minimal (2 lignes/README),
+  vérifié idempotent (`docsh run --only title_block` → 0).
 
-### P2 — nettoyer la playlist toolbar (prev/next v1)
-- `buildToolbar`/`goTo`/`playlist` + labels `prevLabel/nextLabel/
-  prevTitle/nextTitle` : utilisés uniquement quand une page a 2+ audios —
-  **aucune page sn n'en a** (vérifié) ; le feed + barre unifiée couvrent
-  la navigation.
-- Conserver la rétrocompat (mode non-unifié multi-audio) ou retirer pour
-  alléger (~60 lignes + labels + tests) — décision produit.
+### P2 — playlist toolbar v1 (prev/next) — **décision : conserver**
+- Fonctionnelle en mode non-unifié multi-audio (feature documentée,
+  testée) ; morte sur sn (1 audio/page vérifié) mais le retrait casserait
+  la rétrocompat promise. À réévaluer si le mode non-unifié disparaît.
 
-### P2 — docsh `podcast_feed` : simplifier les fallbacks série
-- `_read_series` : kwargs → `.docsh.toml [site]` → index.html (3 chemins).
-  Ramener à 2 (toml → index) en supprimant les kwargs `series_*` (les
-  tests les utilisent — à remplacer par la config toml).
+### P2 — docsh `podcast_feed` : fallbacks série — ✅ fait
+- `_read_series` : `.docsh.toml [site]` → index.html (2 chemins, kwargs
+  `series_*` supprimés) ; test adapté à la config toml.
 
 ### P3 — `updateMediaSession(el, index)` / `trackTitle(el, i)`
 - Le paramètre `index` (playlist) ne sert qu'au fallback du titre ;
