@@ -20,7 +20,7 @@ const PAGE_HTML = `<!doctype html><html><head></head><body>
 
 function boot(html, opts) {
   opts = opts || {};
-  const { overrides, mediaSession, mediaMetadata, serviceWorker, swProbe, hls, localStorage: seedStorage } = opts;
+  const { overrides, mediaSession, mediaMetadata, serviceWorker, swProbe, hls, feed, localStorage: seedStorage } = opts;
   // Site deployed at the domain root; the episode lives only in the hash
   // route (Docsify hash routing). The episode's media files sit next to the
   // rendered page, i.e. at /episodes/01/<file>.
@@ -47,7 +47,35 @@ function boot(html, opts) {
   }
   // No real HLS engine in jsdom: window.Hls is undefined unless the test opts in.
   if (hls) window.Hls = hls;
+  const FEED_JSON = JSON.stringify({
+    version: '1.0',
+    series: { title: 'Test', description: '', author: '', artwork: '', baseUrl: 'https://example.com' },
+    episodes: [
+      { guid: 'a', title: 'Épisode 1', pageUrl: 'https://example.com/episodes/01/',
+        audioUrl: 'https://example.com/episodes/01/ep.m3u8', chaptersUrl: '', transcriptUrl: '',
+        coverUrl: '', date: '', season: 1, episode: 1,
+        next: 'https://example.com/episodes/02/', prev: '' },
+      { guid: 'b', title: 'Épisode 2', pageUrl: 'https://example.com/episodes/02/',
+        audioUrl: 'https://example.com/episodes/02/ep2.m3u8', chaptersUrl: '', transcriptUrl: '',
+        coverUrl: '', date: '', season: 1, episode: 2,
+        next: '', prev: 'https://example.com/episodes/01/' },
+    ],
+  });
+  const FEED_RSS = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+<channel><title>Test</title><description>D</description><link>https://example.com</link>
+<item><title>Épisode 1</title><guid>a</guid><link>https://example.com/episodes/01/</link><enclosure url="https://example.com/episodes/01/ep.m3u8" type="application/vnd.apple.mpegurl"/><podcast:chapters url="x.json" type="application/json+chapters"/><podcast:transcript url="x.vtt" type="text/vtt"/><itunes:season>1</itunes:season><itunes:episode>1</itunes:episode></item>
+<item><title>Épisode 2</title><guid>b</guid><link>https://example.com/episodes/02/</link><enclosure url="https://example.com/episodes/02/ep2.m3u8" type="application/vnd.apple.mpegurl"/><podcast:chapters url="y.json" type="application/json+chapters"/><podcast:transcript url="y.vtt" type="text/vtt"/><itunes:season>1</itunes:season><itunes:episode>2</itunes:episode></item>
+</channel></rss>`;
   window.fetch = async (u) => {
+    if (String(u).endsWith('feed.json')) {
+      return feed === 'json' ? { ok: true, json: async () => JSON.parse(FEED_JSON) }
+        : { ok: false, status: 404 };
+    }
+    if (String(u).endsWith('podcast.xml')) {
+      return feed === 'rss' ? { ok: true, text: async () => FEED_RSS }
+        : { ok: false, status: 404 };
+    }
     if (String(u).endsWith('sw.js')) {
       // SW auto-detect probe (HEAD): ok only when the test opts in.
       return { ok: swProbe === 'ok', status: swProbe === 'ok' ? 200 : 404 };
@@ -1176,4 +1204,48 @@ test('unified: no double player — native audio hidden inside the surface', () 
   assert.ok(surface.contains(audio), 'native audio tucked inside the surface');
   assert.equal(w.document.querySelectorAll('.podcast-player').length, 1,
     'exactly one player UI on the page');
+});
+
+// ── unified: feed catalog (feed.json / RSS fallback) ────────────────
+
+test('unified: feed.json enables next/prev in the bar and loads neighbors', async () => {
+  const w = bootUnified(UNIFIED_HTML, { feed: 'json' });
+  w.document.querySelector('.pp-surface .pp-btn-play').click(); // episode A
+  await new Promise((r) => setTimeout(r, 40));
+  const prev = w.document.querySelector('.pp-global-prev');
+  const next = w.document.querySelector('.pp-global-next');
+  assert.ok(prev && next, 'prev/next buttons in the bar');
+  assert.equal(prev.disabled, true, 'no previous episode');
+  assert.equal(next.disabled, false, 'next episode available');
+  next.click();
+  await new Promise((r) => setTimeout(r, 30));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  assert.ok(gAudio.getAttribute('src').endsWith('/episodes/02/ep2.m3u8'),
+    'next episode loaded from the catalog');
+  assert.equal(gAudio.dataset.title, 'Épisode 2');
+  // Now on B: prev enabled, next disabled.
+  assert.equal(prev.disabled, false);
+  assert.equal(next.disabled, true);
+});
+
+test('unified: prev/next stay disabled without a catalog', async () => {
+  const w = bootUnified(UNIFIED_HTML); // no feed
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 40));
+  const prev = w.document.querySelector('.pp-global-prev');
+  const next = w.document.querySelector('.pp-global-next');
+  assert.equal(prev.disabled, true, 'prev disabled without feed');
+  assert.equal(next.disabled, true, 'next disabled without feed');
+});
+
+test('unified: RSS fallback parses the catalog when feed.json is absent', async () => {
+  const w = bootUnified(UNIFIED_HTML, { feed: 'rss' });
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 40));
+  const next = w.document.querySelector('.pp-global-next');
+  assert.equal(next.disabled, false, 'RSS catalog parsed (next available)');
+  next.click();
+  await new Promise((r) => setTimeout(r, 30));
+  const gAudio = w.document.querySelector('.pp-global audio');
+  assert.ok(gAudio.getAttribute('src').endsWith('/episodes/02/ep2.m3u8'));
 });

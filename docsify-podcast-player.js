@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.3';
+  var PLUGIN_VERSION = '1.6.4';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -103,6 +103,9 @@
     downloadSw: true,                 // true=auto-detect 'sw.js' at site
                                      // root, false=off, string=explicit path
     unified: false,                   // persistent global player (see docs/unified-player.md)
+    feedUrl: true,                    // episode catalog: true=auto-detect
+                                     // 'feed.json' then 'podcast.xml', string=path,
+                                     // false=off (DOM-only behaviour)
     labels: null,                     // FR by default, EN fallback
   };
 
@@ -122,6 +125,7 @@
       transcriptFollow: 'Suivre la lecture', transcriptSearch: 'Filtrer le transcript',
       refollow: 'Reprendre le suivi',
       switchEp: 'Basculer', goToPage: 'Aller à la page',
+      prevEp: 'Épisode précédent', nextEp: 'Épisode suivant',
       followSuspended: 'Suivi de la lecture suspendu',
       followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
@@ -149,6 +153,7 @@
       transcriptFollow: 'Follow playback', transcriptSearch: 'Filter transcript',
       refollow: 'Resume following',
       switchEp: 'Switch', goToPage: 'Go to page',
+      prevEp: 'Previous episode', nextEp: 'Next episode',
       followSuspended: 'Playback following suspended',
       followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
@@ -2270,12 +2275,26 @@
     time.className = 'pp-global-time';
     time.setAttribute('aria-live', 'off');
     bar.appendChild(time);
+    var navPrev = document.createElement('button');
+    navPrev.type = 'button';
+    navPrev.className = 'podcast-player-btn pp-btn pp-global-prev';
+    navPrev.setAttribute('aria-label', settings.labels.prevEp);
+    navPrev.appendChild(icon('chapPrev'));
+    navPrev.disabled = true;
+    bar.appendChild(navPrev);
     var play = document.createElement('button');
     play.type = 'button';
     play.className = 'podcast-player-btn pp-btn pp-global-play';
     play.setAttribute('aria-label', settings.labels.play);
     play.appendChild(icon('play'));
     bar.appendChild(play);
+    var navNext = document.createElement('button');
+    navNext.type = 'button';
+    navNext.className = 'podcast-player-btn pp-btn pp-global-next';
+    navNext.setAttribute('aria-label', settings.labels.nextEp);
+    navNext.appendChild(icon('chapNext'));
+    navNext.disabled = true;
+    bar.appendChild(navNext);
     var close = document.createElement('button');
     close.type = 'button';
     close.className = 'podcast-player-btn pp-btn pp-global-close';
@@ -2287,6 +2306,17 @@
       if (gAudio.paused) { var p = gAudio.play(); if (p && p.catch) p.catch(function () {}); }
       else gAudio.pause();
     });
+    var feedJump = function (dir) {
+      loadFeed().then(function () {
+        var entry = neighborEntry(dir);
+        if (!entry) return;
+        globalLoadEntry(entry);
+        var p = gAudio.play();
+        if (p && p.catch) p.catch(function () { /* autoplay blocked */ });
+      });
+    };
+    navPrev.addEventListener('click', function () { feedJump(-1); });
+    navNext.addEventListener('click', function () { feedJump(1); });
     close.addEventListener('click', function () {
       gAudio.pause();
       gWrap.hidden = true;
@@ -2317,6 +2347,17 @@
     gWrap.appendChild(bar);
     gWrap.hidden = true;
     document.body.appendChild(gWrap);
+    loadFeed();
+  }
+
+  function syncGlobalNav() {
+    if (!gBarReady()) return;
+    var cur = currentEntry();
+    var bar = gWrap.querySelector('.pp-global-bar');
+    var prev = bar.querySelector('.pp-global-prev');
+    var next = bar.querySelector('.pp-global-next');
+    if (prev) prev.disabled = !cur || !cur.prev;
+    if (next) next.disabled = !cur || !cur.next;
   }
 
   function syncGlobalBar() {
@@ -2333,6 +2374,7 @@
     var scrub = bar.querySelector('.pp-global-scrubber');
     scrub.max = String(Math.max(0, Math.floor(isFinite(gAudio.duration) ? gAudio.duration : 0)));
     scrub.value = String(Math.max(0, Math.min(Math.floor(gAudio.currentTime), scrub.max)));
+    syncGlobalNav();
   }
 
   function gBarReady() {
@@ -2346,6 +2388,153 @@
     play.innerHTML = '';
     play.appendChild(icon(playing ? 'pause' : 'play'));
     play.setAttribute('aria-label', playing ? settings.labels.pause : settings.labels.play);
+  }
+
+  // ── Feed / catalog (feed.json, RSS fallback) ───────────────────────
+  var gFeed = null;       // { series, episodes[] }
+  var gFeedPromise = null;
+
+  function loadFeed() {
+    if (!settings.feedUrl) return Promise.resolve(null);
+    if (gFeedPromise) return gFeedPromise;
+    gFeedPromise = doLoadFeed().then(function (data) {
+      gFeed = data;
+      syncGlobalNav();
+      return data;
+    }).catch(function () { return null; });
+    return gFeedPromise;
+  }
+
+  function doLoadFeed() {
+    var cached = null;
+    try { cached = sessionStorage.getItem('pp-feed'); } catch (_) { /* ignore */ }
+    if (cached) {
+      try { return Promise.resolve(JSON.parse(cached)); } catch (_) { /* ignore */ }
+    }
+    var root = siteRootUrl();
+    var path = settings.feedUrl === true ? 'feed.json' : String(settings.feedUrl);
+    return fetch(root + path).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }).then(function (data) {
+      try { sessionStorage.setItem('pp-feed', JSON.stringify(data)); } catch (_) { /* ignore */ }
+      return data;
+    }).catch(function () {
+      if (settings.feedUrl !== true) throw new Error('no feed');
+      return fetch(root + 'podcast.xml').then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.text();
+      }).then(parseRssFeed);
+    });
+  }
+
+  function xmlText(item, tag) {
+    var n = item.getElementsByTagName(tag)[0];
+    return n && n.textContent ? n.textContent.trim() : '';
+  }
+  function xmlAttr(item, tag, attr) {
+    var n = item.getElementsByTagName(tag)[0];
+    return n ? n.getAttribute(attr) || '' : '';
+  }
+
+  function parseRssFeed(xmlText_) {
+    var doc = new DOMParser().parseFromString(xmlText_, 'application/xml');
+    var channel = doc.getElementsByTagName('channel')[0];
+    var series = {
+      title: xmlText(channel, 'title'),
+      description: xmlText(channel, 'description'),
+      author: xmlText(channel, 'itunes:author'),
+      artwork: xmlAttr(channel, 'itunes:image', 'href'),
+      baseUrl: xmlText(channel, 'link'),
+    };
+    var items = doc.getElementsByTagName('item');
+    var episodes = [];
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var ep = {
+        guid: xmlText(item, 'guid') || '',
+        title: xmlText(item, 'title'),
+        description: xmlText(item, 'description'),
+        pageUrl: xmlText(item, 'link'),
+        audioUrl: xmlAttr(item, 'enclosure', 'url'),
+        coverUrl: xmlAttr(item, 'podcast:images', 'srcset').split(' ')[0] || '',
+        chaptersUrl: xmlAttr(item, 'podcast:chapters', 'url'),
+        transcriptUrl: xmlAttr(item, 'podcast:transcript', 'url'),
+        date: xmlText(item, 'pubDate'),
+        season: parseInt(xmlText(item, 'itunes:season') || '0') || 0,
+        episode: parseInt(xmlText(item, 'itunes:episode') || '0') || 0,
+      };
+      ep.next = (items[i + 1] ? xmlText(items[i + 1], 'link') : '');
+      ep.prev = (i > 0 ? xmlText(items[i - 1], 'link') : '');
+      episodes.push(ep);
+    }
+    return { version: '1.0', series: series, episodes: episodes };
+  }
+
+  function pathOf(url) {
+    return String(url || '').replace(/^https?:\/\/[^/]+/, '');
+  }
+
+  function currentEntry() {
+    if (!gFeed || !gFeed.episodes) return null;
+    var want = pathOf(gLoadedSrc);
+    for (var i = 0; i < gFeed.episodes.length; i++) {
+      if (pathOf(gFeed.episodes[i].audioUrl) === want) return gFeed.episodes[i];
+    }
+    return null;
+  }
+
+  function neighborEntry(dir) {
+    var cur = currentEntry();
+    if (!cur) return null;
+    var key = dir < 0 ? 'prev' : 'next';
+    var targetUrl = cur[key];
+    if (!targetUrl) return null;
+    for (var i = 0; i < gFeed.episodes.length; i++) {
+      if (gFeed.episodes[i].pageUrl === targetUrl) return gFeed.episodes[i];
+    }
+    return null;
+  }
+
+  // Load an episode straight from the catalog (no page navigation).
+  function globalLoadEntry(entry) {
+    if (!entry || !entry.audioUrl) return;
+    gLoadedSrc = pathOf(entry.audioUrl);
+    gLoadedRoute = '';
+    if (entry.pageUrl && gFeed && gFeed.series && gFeed.series.baseUrl) {
+      var base = gFeed.series.baseUrl.replace(/\/$/, '');
+      if (entry.pageUrl.indexOf(base) === 0) {
+        gLoadedRoute = '#/' + entry.pageUrl.slice(base.length).replace(/^\//, '');
+      }
+    }
+    gAudio.setAttribute('src', entry.audioUrl);
+    ['title', 'cover', 'chapters', 'download', 'originalSrc'].forEach(function (k) {
+      delete gAudio.dataset[k];
+    });
+    if (entry.title) gAudio.dataset.title = entry.title;
+    if (entry.coverUrl) gAudio._coverUrl = entry.coverUrl;
+    if (entry.chaptersUrl) gAudio.dataset.chapters = entry.chaptersUrl;
+    if (entry.transcriptUrl) gAudio.dataset.transcript = entry.transcriptUrl;
+    if (entry.downloadUrl) gAudio.dataset.download = entry.downloadUrl;
+    if (gAudio._hls) { try { gAudio._hls.destroy(); } catch (_) { /* ignore */ } }
+    gAudio._hls = null;
+    gAudio.dataset.hlsAttached = '';
+    gAudio._hlsFatalRetries = 0;
+    gAudio._chapters = null;
+    try {
+      var sp = parseFloat(sessionStorage.getItem(speedKey(gAudio)) ||
+        sessionStorage.getItem('podcast-speed'));
+      if (sp && settings.speedOptions && settings.speedOptions.indexOf(sp) !== -1) {
+        gAudio.playbackRate = sp;
+      }
+    } catch (_) { /* ignore */ }
+    attachHls(gAudio);
+    updateMediaSession(gAudio, -1);
+    gWrap.hidden = false;
+    document.body.classList.add('pp-has-global');
+    syncGlobalBar();
+    syncGlobalPlayUI();
+    gSurfaces.forEach(function (s) { try { s(false); } catch (_) { /* ignore */ } });
   }
 
   // Load an episode (a page <audio> element) into the global player.
@@ -2615,6 +2804,7 @@
       resumeChip: user.resumeChip !== undefined ? user.resumeChip : DEFAULTS.resumeChip,
       downloadSw: user.downloadSw !== undefined ? user.downloadSw : DEFAULTS.downloadSw,
       unified: user.unified !== undefined ? user.unified : DEFAULTS.unified,
+      feedUrl: user.feedUrl !== undefined ? user.feedUrl : DEFAULTS.feedUrl,
       print: user.print || DEFAULTS.print,
       labels: labels,
     };
