@@ -1167,3 +1167,13 @@ test('unified: returning to the playing episode page shows the full player', asy
   assert.ok(w.document.querySelector('.pp-controls'), 'back on A: full player bound');
   assert.ok(!w.document.querySelector('.pp-now-playing'), 'no banner on the playing page');
 });
+
+test('unified: no double player — native audio hidden inside the surface', () => {
+  const w = bootUnified();
+  const surface = w.document.querySelector('.pp-surface');
+  assert.equal(surface.dataset.enhanced, '1', 'surface enhanced → native audio hidden by CSS');
+  const audio = w.document.querySelector('.markdown-section audio');
+  assert.ok(surface.contains(audio), 'native audio tucked inside the surface');
+  assert.equal(w.document.querySelectorAll('.podcast-player').length, 1,
+    'exactly one player UI on the page');
+});

@@ -55,7 +55,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.2';
+  var PLUGIN_VERSION = '1.6.3';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -2424,6 +2424,9 @@
     wrap.setAttribute('aria-label', trackTitle(el, index) || 'Podcast player');
     el.parentNode.insertBefore(wrap, el);
     el._ppSurface = wrap;
+    wrap.dataset.enhanced = '1';
+    // Hide the native <audio controls> inside the enhanced container.
+    wrap.appendChild(el);
 
     var main = document.createElement('div');
     main.className = 'pp-surface-main';
