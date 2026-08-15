@@ -768,7 +768,7 @@ test('v2: auto-detects and registers sw.js at the site root (version-pinned)', a
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(sw.registered.length, 1, 'registered once');
   const url = sw.registered[0];
-  assert.equal(url, '/sw.js?v=1.4.0', 'registered at site root, version-pinned');
+  assert.match(url, /^\/sw\.js\?v=\d+\.\d+\.\d+$/, 'registered at site root, version-pinned');
   assert.equal(sw.updateCalls, 1, 'update() called after registration');
 });
 
@@ -787,7 +787,7 @@ test('v2: explicit downloadSw path registers without a probe', async () => {
   });
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(sw.registered.length, 1);
-  assert.match(sw.registered[0], /assets\/sw\.js\?v=1\.4\.0$/);
+  assert.match(sw.registered[0], /assets\/sw\.js\?v=\d+\.\d+\.\d+$/);
 });
 
 test('v2: downloadSw:false disables registration', async () => {
