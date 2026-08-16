@@ -1680,6 +1680,33 @@ test('unified: the bottom player expands and collapses', async () => {
   assert.equal(panel.hidden, false, 'panel reopens');
 });
 
+test('unified: expanded panel replaces the mini bar (no duplicated visible controls)', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gWrap = w.document.querySelector('.pp-global');
+  assert.ok(gWrap.classList.contains('pp-expanded'), 'expanded state on the player');
+  // The panel header carries the full control set (mini bar is hidden).
+  const header = w.document.querySelector('.pp-global-panel-header');
+  assert.ok(header, 'panel header present');
+  assert.ok(header.querySelector('.pp-global-cover'), 'cover in the header');
+  assert.ok(header.querySelector('.pp-global-title'), 'title in the header');
+  assert.ok(header.querySelector('.pp-global-prev') && header.querySelector('.pp-global-next'),
+    'episode prev/next in the header');
+  assert.ok(header.querySelector('.pp-panel-share'), 'share in the header');
+  assert.ok(header.querySelector('.pp-panel-collapse'), 'collapse in the header');
+  assert.ok(header.querySelector('.pp-panel-minimize'), 'minimize in the header');
+  assert.ok(header.querySelector('.pp-panel-close'), 'close in the header');
+  // Collapse → mini bar back, panel hidden.
+  header.querySelector('.pp-panel-collapse').click();
+  assert.equal(w.document.querySelector('.pp-global-panel').hidden, true, 'panel collapsed');
+  assert.ok(!gWrap.classList.contains('pp-expanded'), 'mini bar visible again');
+  // Expand from the bar button.
+  w.document.querySelector('.pp-global-expand').click();
+  assert.equal(w.document.querySelector('.pp-global-panel').hidden, false, 'panel open again');
+  assert.ok(gWrap.classList.contains('pp-expanded'), 'expanded again');
+});
+
 test('unified: no double player — native audio hidden inside the surface', () => {
   const w = bootUnified();
   const surface = w.document.querySelector('.pp-surface');
@@ -1730,20 +1757,21 @@ test('unified: feed.json enables next/prev in the bar and loads neighbors', asyn
   const w = bootUnified(UNIFIED_HTML, { feed: 'json' });
   w.document.querySelector('.pp-surface .pp-btn-play').click(); // episode A
   await new Promise((r) => setTimeout(r, 40));
-  const prev = w.document.querySelector('.pp-global-prev');
-  const next = w.document.querySelector('.pp-global-next');
-  assert.ok(prev && next, 'prev/next buttons in the bar');
-  assert.equal(prev.disabled, true, 'no previous episode');
-  assert.equal(next.disabled, false, 'next episode available');
-  next.click();
+  // The panel is rebuilt per episode: always query fresh elements.
+  const prev = () => w.document.querySelector('.pp-global-prev');
+  const next = () => w.document.querySelector('.pp-global-next');
+  assert.ok(prev() && next(), 'prev/next buttons present');
+  assert.equal(prev().disabled, true, 'no previous episode');
+  assert.equal(next().disabled, false, 'next episode available');
+  next().click();
   await new Promise((r) => setTimeout(r, 30));
   const gAudio = w.document.querySelector('.pp-global audio');
   assert.ok(gAudio.getAttribute('src').endsWith('/episodes/02/ep2.m3u8'),
     'next episode loaded from the catalog');
   assert.equal(gAudio.dataset.title, 'Épisode 2');
   // Now on B: prev enabled, next disabled.
-  assert.equal(prev.disabled, false);
-  assert.equal(next.disabled, true);
+  assert.equal(prev().disabled, false);
+  assert.equal(next().disabled, true);
 });
 
 test('unified: prev/next stay disabled without a catalog', async () => {

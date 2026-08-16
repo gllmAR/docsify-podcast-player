@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.7.0';
+  var PLUGIN_VERSION = '1.7.1';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -2515,6 +2515,14 @@
       '.pp-global-panel { max-height: 62vh; overflow: auto; padding: .7em .9em;',
       '  border-bottom: 1px solid var(--pp-border); background: var(--pp-bg); }',
       '.pp-global-panel[hidden] { display: none; }',
+      // Mutually exclusive views: expanded → the mini bar is hidden.
+      '.pp-global.pp-expanded .pp-global-bar { display: none; }',
+      '.pp-global-panel-header { display: flex; align-items: center; gap: .6em;',
+      '  margin-bottom: .6em; }',
+      '.pp-global-panel-header .pp-global-cover { width: 52px; height: 52px; }',
+      '.pp-global-panel-header .pp-panel-share, .pp-global-panel-header .pp-panel-collapse,',
+      '.pp-global-panel-header .pp-panel-minimize, .pp-global-panel-header .pp-panel-close {',
+      '  flex: 0 0 auto; }',
       '.pp-global-caption { padding: .3em .9em; font-size: .92em; line-height: 1.4;',
       '  background: var(--pp-bg-alt); border-bottom: 1px solid var(--pp-border); }',
       '.pp-global-caption[hidden] { display: none; }',
@@ -2752,22 +2760,10 @@
     play.addEventListener('click', function () {
       if (gAudio.paused) playMedia(gAudio); else gAudio.pause();
     });
-    var feedJump = function (dir) {
-      loadFeed().then(function () {
-        var entry = neighborEntry(dir);
-        if (!entry) return;
-        globalLoadEntry(entry);
-        playMedia(gAudio);
-      });
-    };
-    navPrev.addEventListener('click', function () { feedJump(-1); });
-    navNext.addEventListener('click', function () { feedJump(1); });
+    navPrev.addEventListener('click', function () { globalFeedJump(-1); });
+    navNext.addEventListener('click', function () { globalFeedJump(1); });
     // Hide (minimize): the bar collapses, playback continues.
-    minimize.addEventListener('click', function () {
-      gWrap.hidden = true;
-      document.body.classList.remove('pp-has-global');
-      updateReopenButton();
-    });
+    minimize.addEventListener('click', function () { minimizeGlobal(); });
     // Quit: stops playback and unloads the episode (distinct from hide).
     close.addEventListener('click', function () {
       quitGlobal();
@@ -2887,6 +2883,71 @@
     if (!gPanel) return;
     cleanupMediaListeners(gAudio);
     gPanel.innerHTML = '';
+
+    // Expanded-view header: the collapsed bar is hidden while the panel is
+    // open (mutually exclusive views — no duplicated controls).
+    var header = document.createElement('div');
+    header.className = 'pp-global-panel-header';
+    var hCover = document.createElement('img');
+    hCover.className = 'pp-global-cover';
+    hCover.alt = '';
+    hCover.addEventListener('error', function () { hCover.style.display = 'none'; });
+    header.appendChild(hCover);
+    var hMeta = document.createElement('div');
+    hMeta.className = 'pp-global-meta';
+    var hTitle = document.createElement('span');
+    hTitle.className = 'pp-global-title';
+    hMeta.appendChild(hTitle);
+    var hNow = document.createElement('span');
+    hNow.className = 'pp-global-now';
+    hMeta.appendChild(hNow);
+    header.appendChild(hMeta);
+    var hPrev = document.createElement('button');
+    hPrev.type = 'button';
+    hPrev.className = 'podcast-player-btn pp-btn pp-global-prev';
+    hPrev.setAttribute('aria-label', settings.labels.prevEp);
+    hPrev.appendChild(icon('chapPrev'));
+    hPrev.disabled = true;
+    hPrev.addEventListener('click', function () { globalFeedJump(-1); });
+    header.appendChild(hPrev);
+    var hNext = document.createElement('button');
+    hNext.type = 'button';
+    hNext.className = 'podcast-player-btn pp-btn pp-global-next';
+    hNext.setAttribute('aria-label', settings.labels.nextEp);
+    hNext.appendChild(icon('chapNext'));
+    hNext.disabled = true;
+    hNext.addEventListener('click', function () { globalFeedJump(1); });
+    header.appendChild(hNext);
+    var hShare = document.createElement('button');
+    hShare.type = 'button';
+    hShare.className = 'podcast-player-btn pp-btn pp-panel-share';
+    hShare.setAttribute('aria-label', settings.labels.share);
+    hShare.appendChild(icon('share'));
+    hShare.addEventListener('click', shareCurrent);
+    header.appendChild(hShare);
+    var hCollapse = document.createElement('button');
+    hCollapse.type = 'button';
+    hCollapse.className = 'podcast-player-btn pp-btn pp-panel-collapse';
+    hCollapse.setAttribute('aria-label', settings.labels.collapse);
+    hCollapse.appendChild(icon('minimize'));
+    hCollapse.addEventListener('click', function () { toggleGlobalPanel(); });
+    header.appendChild(hCollapse);
+    var hMin = document.createElement('button');
+    hMin.type = 'button';
+    hMin.className = 'podcast-player-btn pp-btn pp-panel-minimize';
+    hMin.setAttribute('aria-label', settings.labels.minimize);
+    hMin.appendChild(icon('minimize'));
+    hMin.addEventListener('click', function () { minimizeGlobal(); });
+    header.appendChild(hMin);
+    var hClose = document.createElement('button');
+    hClose.type = 'button';
+    hClose.className = 'podcast-player-btn pp-btn pp-panel-close';
+    hClose.setAttribute('aria-label', settings.labels.closeMini);
+    hClose.appendChild(icon('close'));
+    hClose.addEventListener('click', function () { quitGlobal(); });
+    header.appendChild(hClose);
+    gPanel.appendChild(header);
+
     buildControls(gAudio, gAudio, gWrap, gPanel);
     var panels = document.createElement('div');
     panels.className = 'pp-panels';
@@ -2915,6 +2976,10 @@
   function openGlobalPanel(open) {
     if (!gPanel) return;
     gPanel.hidden = !open;
+    // Mutually exclusive views: expanded → the mini bar is hidden (its
+    // controls are duplicated by the panel header/body).
+    if (open) gWrap.classList.add('pp-expanded');
+    else gWrap.classList.remove('pp-expanded');
     if (gExpandBtn) {
       gExpandBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
       gExpandBtn.setAttribute('aria-label', open ? settings.labels.collapse : settings.labels.expand);
@@ -2938,8 +3003,9 @@
     gLoadedSrc = '';
     gLoadedRoute = '';
     gAudio._coverUrl = '';
-    var tEl = gWrap.querySelector('.pp-global-title');
-    if (tEl) tEl.textContent = '';
+    gWrap.querySelectorAll('.pp-global-title').forEach(function (tEl) {
+      tEl.textContent = '';
+    });
     gWrap.hidden = true;
     document.body.classList.remove('pp-has-global');
     updateReopenButton();
@@ -2960,6 +3026,24 @@
     } else {
       gReopenBtn.hidden = true;
     }
+  }
+
+  // Episode prev/next from the catalog (bar buttons and the expanded
+  // panel header share the same action).
+  function globalFeedJump(dir) {
+    loadFeed().then(function () {
+      var entry = neighborEntry(dir);
+      if (!entry) return;
+      globalLoadEntry(entry);
+      playMedia(gAudio);
+    });
+  }
+
+  // Hide (minimize): the bar collapses, playback continues.
+  function minimizeGlobal() {
+    gWrap.hidden = true;
+    document.body.classList.remove('pp-has-global');
+    updateReopenButton();
   }
 
   function timeParam() {
@@ -3009,23 +3093,27 @@
   function syncGlobalNav() {
     if (!gBarReady()) return;
     var cur = currentEntry();
-    var bar = gWrap.querySelector('.pp-global-bar');
-    var prev = bar.querySelector('.pp-global-prev');
-    var next = bar.querySelector('.pp-global-next');
-    if (prev) prev.disabled = !cur || !cur.prev;
-    if (next) next.disabled = !cur || !cur.next;
+    gWrap.querySelectorAll('.pp-global-prev').forEach(function (prev) {
+      prev.disabled = !cur || !cur.prev;
+    });
+    gWrap.querySelectorAll('.pp-global-next').forEach(function (next) {
+      next.disabled = !cur || !cur.next;
+    });
   }
 
   function syncGlobalBar() {
     if (!gBarReady()) return;
     var bar = gWrap.querySelector('.pp-global-bar');
-    bar.querySelector('.pp-global-title').textContent = trackTitle(gAudio, -1);
+    gWrap.querySelectorAll('.pp-global-title').forEach(function (tEl) {
+      tEl.textContent = trackTitle(gAudio, -1);
+    });
     bar.querySelector('.pp-global-time').textContent =
       formatTime(gAudio.currentTime) + ' / ' +
       (isFinite(gAudio.duration) ? formatTime(gAudio.duration) : '\u221E');
     if (gAudio._coverUrl) {
-      var img = bar.querySelector('.pp-global-cover');
-      if (img.getAttribute('src') !== gAudio._coverUrl) img.src = gAudio._coverUrl;
+      gWrap.querySelectorAll('.pp-global-cover').forEach(function (img) {
+        if (img.getAttribute('src') !== gAudio._coverUrl) img.src = gAudio._coverUrl;
+      });
     }
     var scrub = bar.querySelector('.pp-global-scrubber');
     scrub.max = String(Math.max(0, Math.floor(isFinite(gAudio.duration) ? gAudio.duration : 0)));
