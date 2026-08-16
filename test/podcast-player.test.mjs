@@ -344,6 +344,134 @@ test('MediaSession play/pause/stop handlers control the active audio', async () 
   assert.equal(pos, 0, 'stop rewinds to the start');
 });
 
+test('MediaSession seek handlers: seekSeconds, seekOffset, clamp, seekto', () => {
+  const handlers = {};
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler: (a, h) => { handlers[a] = h; },
+      metadata: null, playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const audio = w.document.querySelector('audio');
+  let t = 0;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  Object.defineProperty(audio, 'duration', { value: 600, configurable: true });
+  audio._chapters = null; // no chapters: plain ±seekSeconds
+  fire(audio, 'play'); // becomes the activeAudio
+  t = 50;
+  handlers.seekforward();
+  assert.equal(t, 60, 'forward by seekSeconds (10)');
+  handlers.seekbackward();
+  assert.equal(t, 50, 'back by seekSeconds (10)');
+  t = 5;
+  handlers.seekbackward();
+  assert.equal(t, 0, 'backward clamps at 0');
+  // The OS seekOffset (hardware buttons) wins over seekSeconds.
+  t = 50;
+  handlers.seekforward({ seekOffset: 30 });
+  assert.equal(t, 80, 'forward by the OS seekOffset');
+  handlers.seekbackward({ seekOffset: 15 });
+  assert.equal(t, 65, 'back by the OS seekOffset');
+  // seekto honors seekTime.
+  handlers.seekto({ seekTime: 77 });
+  assert.equal(t, 77, 'seekto seeks to seekTime');
+});
+
+test('MediaSession seek handlers jump between chapters when they exist', async () => {
+  const handlers = {};
+  const w = boot(PAGE_HTML, {
+    mediaSession: {
+      setActionHandler: (a, h) => { handlers[a] = h; },
+      metadata: null, playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  await new Promise((r) => setTimeout(r, 30)); // chapters load
+  const audio = w.document.querySelector('audio');
+  let t = 35; // inside chapter 2 (starts at 30)
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  fire(audio, 'play');
+  handlers.seekbackward();
+  assert.equal(t, 30, 'back → previous chapter start');
+  t = 10; // chapter 1 (starts at 0)
+  handlers.seekbackward();
+  assert.equal(t, 0, 'back at the first chapter → 0');
+  t = 10;
+  handlers.seekforward();
+  assert.equal(t, 30, 'forward → next chapter start');
+  t = 35; // last chapter: no next → plain step (OS offset when given)
+  handlers.seekforward({ seekOffset: 30 });
+  assert.equal(t, 65, 'forward past the last chapter → +seekOffset');
+});
+
+test('MediaSession OS handlers drive the persistent player in unified mode', async () => {
+  const handlers = {};
+  const w = bootUnified(UNIFIED_HTML, {
+    mediaSession: {
+      setActionHandler: (a, h) => { handlers[a] = h; },
+      metadata: null, playbackState: '',
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  // Surface-only flow: no full player, activeAudio is null — the OS
+  // controls must still drive the global audio.
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let t = 0;
+  Object.defineProperty(gAudio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  let plays = 0, pauses = 0;
+  gAudio.play = () => { plays++; return Promise.resolve(); };
+  gAudio.pause = () => { pauses++; };
+  handlers.play();
+  assert.equal(plays, 1, 'OS play drives the global audio');
+  handlers.pause();
+  assert.equal(pauses, 1, 'OS pause drives the global audio');
+  handlers.seekto({ seekTime: 42 });
+  assert.equal(t, 42, 'OS seek drives the global audio');
+  handlers.stop();
+  assert.equal(pauses, 2, 'OS stop pauses');
+  assert.equal(t, 0, 'OS stop rewinds to the start');
+});
+
+test('MediaSession playbackState + positionState are set from the persistent bar', async () => {
+  let state = '';
+  const states = [];
+  const w = bootUnified(UNIFIED_HTML, {
+    mediaSession: {
+      setActionHandler() {},
+      metadata: null,
+      set playbackState(s) { state = s; },
+      get playbackState() { return state; },
+      setPositionState(s) { states.push(s); },
+    },
+    mediaMetadata: class { constructor(o) { Object.assign(this, o); } },
+  });
+  const gAudio = w.document.querySelector('.pp-global audio');
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  fire(gAudio, 'play');
+  assert.equal(state, 'playing', 'bar play → playbackState playing');
+  Object.defineProperty(gAudio, 'duration', { value: 600, configurable: true });
+  Object.defineProperty(gAudio, 'currentTime', { value: 42, configurable: true });
+  fire(gAudio, 'timeupdate');
+  assert.ok(states.length >= 1, 'positionState set from the bar');
+  const last = states[states.length - 1];
+  assert.equal(last.duration, 600);
+  assert.equal(last.position, 42);
+  fire(gAudio, 'pause');
+  assert.equal(state, 'paused', 'bar pause → playbackState paused');
+  fire(gAudio, 'ended');
+  assert.equal(state, 'paused', 'bar ended → playbackState paused');
+});
+
 test('chapters JSON v1.2.0 wrapper renders the same list as a bare array', async () => {
   const w = boot(PAGE_HTML);
   await new Promise((r) => setTimeout(r, 10));

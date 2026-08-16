@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.14';
+  var PLUGIN_VERSION = '1.6.15';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -1572,16 +1572,30 @@
     if (mediaSessionReady) return;
     if (!navigator.mediaSession) return;
     mediaSessionReady = true;
+    // The OS controls always drive the persistent player in unified mode,
+    // even when no full player is on the page (activeAudio is then null).
+    function currentMedia() {
+      if (activeAudio) return activeAudio;
+      if (gAudio && gAudio.getAttribute('src')) return gAudio;
+      return null;
+    }
+    function seekStep(details) {
+      return (details && isFinite(details.seekOffset) && details.seekOffset > 0)
+        ? details.seekOffset : settings.seekSeconds;
+    }
     try {
       navigator.mediaSession.setActionHandler('play', function () {
-        if (activeAudio) playMedia(activeAudio);
+        var m = currentMedia();
+        if (m) playMedia(m);
         else if (playlist.length) goTo(0, true);
       });
       navigator.mediaSession.setActionHandler('pause', function () {
-        if (activeAudio) activeAudio.pause();
+        var m = currentMedia();
+        if (m) m.pause();
       });
       navigator.mediaSession.setActionHandler('stop', function () {
-        if (activeAudio) { activeAudio.pause(); activeAudio.currentTime = 0; }
+        var m = currentMedia();
+        if (m) { m.pause(); m.currentTime = 0; }
       });
       navigator.mediaSession.setActionHandler('nexttrack', function () {
         navToEpisode('.pagination-item--next');
@@ -1589,37 +1603,44 @@
       navigator.mediaSession.setActionHandler('previoustrack', function () {
         navToEpisode('.pagination-item--previous');
       });
-      navigator.mediaSession.setActionHandler('seekforward', function () {
-        if (!activeAudio) return;
-        var chapters = activeAudio._chapters;
+      navigator.mediaSession.setActionHandler('seekforward', function (details) {
+        var m = currentMedia();
+        if (!m) return;
+        var chapters = m._chapters;
         if (chapters && chapters.length) {
+          // Chapter-aware skip: jump to the next chapter start.
           for (var i = 0; i < chapters.length; i++) {
-            if ((parseFloat(chapters[i].startTime) || 0) > activeAudio.currentTime + 0.5) {
-              activeAudio.currentTime = parseFloat(chapters[i].startTime) || 0;
+            if ((parseFloat(chapters[i].startTime) || 0) > m.currentTime + 0.5) {
+              m.currentTime = parseFloat(chapters[i].startTime) || 0;
               return;
             }
           }
         }
-        activeAudio.currentTime = Math.min(activeAudio.duration || Infinity, activeAudio.currentTime + settings.seekSeconds);
+        var step = seekStep(details);
+        m.currentTime = Math.min(m.duration || Infinity, m.currentTime + step);
       });
-      navigator.mediaSession.setActionHandler('seekbackward', function () {
-        if (!activeAudio) return;
-        var chapters = activeAudio._chapters;
+      navigator.mediaSession.setActionHandler('seekbackward', function (details) {
+        var m = currentMedia();
+        if (!m) return;
+        var chapters = m._chapters;
         if (chapters && chapters.length) {
+          // Chapter-aware skip: jump to the previous chapter start.
           for (var i = chapters.length - 1; i >= 0; i--) {
-            if ((parseFloat(chapters[i].startTime) || 0) < activeAudio.currentTime - 0.5) {
-              activeAudio.currentTime = parseFloat(chapters[i].startTime) || 0;
+            if ((parseFloat(chapters[i].startTime) || 0) < m.currentTime - 0.5) {
+              m.currentTime = parseFloat(chapters[i].startTime) || 0;
               return;
             }
           }
-          activeAudio.currentTime = 0;
+          m.currentTime = 0;
           return;
         }
-        activeAudio.currentTime = Math.max(0, activeAudio.currentTime - settings.seekSeconds);
+        var step = seekStep(details);
+        m.currentTime = Math.max(0, m.currentTime - step);
       });
       navigator.mediaSession.setActionHandler('seekto', function (details) {
-        if (activeAudio && details.seekTime !== undefined) {
-          activeAudio.currentTime = details.seekTime;
+        var m = currentMedia();
+        if (m && details.seekTime !== undefined) {
+          m.currentTime = details.seekTime;
         }
       });
     } catch (e) { /* ignore */ }
@@ -2729,16 +2750,22 @@
       gSurfaces.forEach(function (s) { try { s(playing); } catch (_) { /* ignore */ } });
     }
     gAudio.addEventListener('play', function () {
+      activeAudio = gAudio;
+      updateMediaSession(gAudio, -1);
+      setPlaybackState('playing');
+      updatePositionState(gAudio);
       syncGlobalPlayUI(true);
       syncSurfaces(true);
       showGlobalBar(); // reappear if the user closed the bar
     });
     gAudio.addEventListener('pause', function () {
+      setPlaybackState('paused');
       syncGlobalPlayUI(false);
       syncSurfaces(false);
     });
     gAudio.addEventListener('ended', function () {
       clearPosition(gAudio);
+      setPlaybackState('paused');
       syncGlobalPlayUI(false);
       syncSurfaces(false);
       autoAdvanceNext();
@@ -2759,8 +2786,12 @@
     gAudio.addEventListener('timeupdate', function () {
       savePosition(gAudio);
       syncGlobalBar();
+      updatePositionState(gAudio);
     });
-    gAudio.addEventListener('durationchange', syncGlobalBar);
+    gAudio.addEventListener('durationchange', function () {
+      syncGlobalBar();
+      updatePositionState(gAudio);
+    });
     gAudio.addEventListener('ratechange', function () { updatePositionState(gAudio); });
 
     gWrap.appendChild(bar);
