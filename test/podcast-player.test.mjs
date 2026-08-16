@@ -1266,28 +1266,53 @@ test('unified: navigation keeps playing; new episode page shows a banner and swi
   assert.ok(banner2 && banner2.hidden, 'banner hidden after switch');
 });
 
-test('unified: the persistent bar hides (close) and reappears (reopen button / play)', async () => {
+test('unified: minimize hides the bar without stopping playback; reopen brings it back', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
   const bar = w.document.querySelector('.pp-global');
   assert.equal(bar.hidden, false, 'bar visible after play');
-  bar.querySelector('.pp-global-close').click();
-  assert.equal(bar.hidden, true, 'bar hides on close');
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let pauses = 0;
+  gAudio.addEventListener('pause', () => { pauses++; });
+  bar.querySelector('.pp-global-minimize').click();
+  assert.equal(bar.hidden, true, 'bar hides on minimize');
+  assert.equal(pauses, 0, 'minimize never stops the playback');
   assert.ok(!w.document.body.classList.contains('pp-has-global'),
     'body padding removed while hidden');
   const reopen = w.document.querySelector('.pp-global-reopen');
   assert.ok(reopen, 'floating reopen button exists');
-  assert.equal(reopen.hidden, false, 'reopen button appears when the bar is closed');
+  assert.equal(reopen.hidden, false, 'reopen button appears when hidden');
   // Reappear via the floating button.
   reopen.click();
   assert.equal(bar.hidden, false, 'bar reappears on reopen');
   assert.equal(reopen.hidden, true, 'reopen button hides while the bar is visible');
   // Reappear via a surface play interaction.
-  bar.querySelector('.pp-global-close').click();
+  bar.querySelector('.pp-global-minimize').click();
   assert.equal(bar.hidden, true, 'bar hidden again');
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   assert.equal(bar.hidden, false, 'playing from the surface brings the bar back');
+});
+
+test('unified: quit stops playback and unloads the episode (distinct from hide)', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const bar = w.document.querySelector('.pp-global');
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let pauses = 0;
+  const origPause = gAudio.pause.bind(gAudio);
+  gAudio.pause = () => { pauses++; origPause(); };
+  bar.querySelector('.pp-global-close').click();
+  assert.equal(pauses, 1, 'quit stops the playback');
+  assert.equal(bar.hidden, true, 'bar hidden after quit');
+  assert.equal(gAudio.getAttribute('src'), null, 'episode unloaded');
+  const reopen = w.document.querySelector('.pp-global-reopen');
+  assert.equal(reopen.hidden, true, 'no reopen button after a quit (nothing loaded)');
+  // A fresh play trigger reloads and reopens.
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  assert.equal(bar.hidden, false, 'playing again reopens the bar');
+  assert.ok(gAudio.getAttribute('src'), 'episode reloaded');
 });
 
 test('unified: resume chip loads the saved position into the global player', async () => {

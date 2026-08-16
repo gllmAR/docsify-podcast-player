@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.12';
+  var PLUGIN_VERSION = '1.6.13';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -137,7 +137,8 @@
       bookmarkDelete: 'Supprimer le signet à {t}',
       bookmarkEmpty: 'Aucun signet pour cet épisode.',
       global: 'Lecteur',
-      closeMini: 'Fermer le lecteur', openMini: 'Rouvrir le lecteur',
+      closeMini: 'Fermer le lecteur (arrête la lecture)',
+      openMini: 'Rouvrir le lecteur', minimize: 'Réduire le lecteur',
       help: 'Raccourcis clavier', closeHelp: 'Fermer',
       error: 'Erreur', retry: 'Réessayer',
       nowPlaying: 'En lecture', title: 'Épisode',
@@ -172,7 +173,8 @@
       bookmarkDelete: 'Delete bookmark at {t}',
       bookmarkEmpty: 'No bookmarks for this episode.',
       global: 'Player',
-      closeMini: 'Close player', openMini: 'Reopen player',
+      closeMini: 'Close player (stops playback)',
+      openMini: 'Reopen player', minimize: 'Minimize player',
       help: 'Keyboard shortcuts', closeHelp: 'Close',
       error: 'Error', retry: 'Retry',
       nowPlaying: 'Now playing', title: 'Episode',
@@ -833,6 +835,7 @@
     share: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>',
     close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
     bookmark: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg>',
+    minimize: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>',
   };
 
   function icon(name) {
@@ -2563,10 +2566,18 @@
     shareBtn.appendChild(icon('share'));
     shareBtn.addEventListener('click', shareCurrent);
     bar.appendChild(shareBtn);
+    var minimize = document.createElement('button');
+    minimize.type = 'button';
+    minimize.className = 'podcast-player-btn pp-btn pp-global-minimize';
+    minimize.setAttribute('aria-label', settings.labels.minimize);
+    minimize.title = settings.labels.minimize;
+    minimize.appendChild(icon('minimize'));
+    bar.appendChild(minimize);
     var close = document.createElement('button');
     close.type = 'button';
     close.className = 'podcast-player-btn pp-btn pp-global-close';
     close.setAttribute('aria-label', settings.labels.closeMini);
+    close.title = settings.labels.closeMini;
     close.appendChild(icon('close'));
     bar.appendChild(close);
 
@@ -2583,11 +2594,15 @@
     };
     navPrev.addEventListener('click', function () { feedJump(-1); });
     navNext.addEventListener('click', function () { feedJump(1); });
-    close.addEventListener('click', function () {
-      gAudio.pause();
+    // Hide (minimize): the bar collapses, playback continues.
+    minimize.addEventListener('click', function () {
       gWrap.hidden = true;
       document.body.classList.remove('pp-has-global');
       updateReopenButton();
+    });
+    // Quit: stops playback and unloads the episode (distinct from hide).
+    close.addEventListener('click', function () {
+      quitGlobal();
     });
     scrub.addEventListener('input', function () {
       gAudio.currentTime = parseFloat(scrub.value) || 0;
@@ -2669,8 +2684,27 @@
     if (gReopenBtn) gReopenBtn.hidden = true;
   }
 
-  // The floating reopen button appears only when the bar was closed while
-  // an episode is still loaded.
+  // Quit the persistent player: stop playback and unload the episode.
+  // Hiding (minimize) is a different action — it never touches playback.
+  function quitGlobal() {
+    gAudio.pause();
+    if (gAudio._hls) { try { gAudio._hls.destroy(); } catch (_) { /* ignore */ } }
+    gAudio._hls = null;
+    gAudio.dataset.hlsAttached = '';
+    gAudio.removeAttribute('src');
+    gLoadedSrc = '';
+    gLoadedRoute = '';
+    gAudio._coverUrl = '';
+    var tEl = gWrap.querySelector('.pp-global-title');
+    if (tEl) tEl.textContent = '';
+    gWrap.hidden = true;
+    document.body.classList.remove('pp-has-global');
+    updateReopenButton();
+    try { if (navigator.mediaSession) navigator.mediaSession.metadata = null; } catch (_) { /* ignore */ }
+  }
+
+  // The floating reopen button appears only when the bar was hidden while
+  // an episode is still loaded (never after a quit).
   function updateReopenButton() {
     if (!gReopenBtn) return;
     var loaded = gAudio && gAudio.getAttribute('src');

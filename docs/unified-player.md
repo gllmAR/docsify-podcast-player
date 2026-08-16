@@ -102,6 +102,11 @@ jusque-là)
 `reEnhance()` fait monter la surface en lecteur plein à la bascule ;
 bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 
+> **Évolution 1.6.13 — cacher ≠ quitter.** « Réduire » (chevron, `pp-global-minimize`)
+> replie la barre **sans toucher à la lecture** ; « ✕ » (`pp-global-close`)
+> **quitte** : arrête la lecture, détruit le HLS et décharge l'épisode
+> (pas de bouton flottant après un quit ; un nouveau play recharge).
+>
 > **Évolution 1.6.12 — le déclenchement ne change plus la page.** Le clic
 > play sur une surface **ne monte plus** la surface en lecteur plein : la
 > page garde son interface compacte, l'interaction passe à la barre
