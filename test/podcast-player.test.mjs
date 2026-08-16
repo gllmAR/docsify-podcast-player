@@ -1651,7 +1651,8 @@ test('unified: captions live in the bottom player (not the page)', async () => {
   t = 2;
   fire(gAudio, 'timeupdate');
   const cap = w.document.querySelector('.pp-global-caption');
-  assert.ok(cap, 'caption strip in the bottom player');
+  assert.ok(cap, 'caption row in the bottom player');
+  assert.ok(cap.closest('.pp-global-bar'), 'caption integrated inside the player');
   assert.equal(cap.hidden, false, 'caption visible at the cue');
   assert.match(cap.textContent, /Bonjour le monde/);
   assert.ok(!w.document.querySelector('.markdown-section .pp-caption'),

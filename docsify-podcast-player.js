@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.7.2';
+  var PLUGIN_VERSION = '1.7.3';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -2510,8 +2510,10 @@
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
       'body.pp-has-global { padding-bottom: 64px; }',
-      // Single view: transport row inside the bar + "details" panel.
-      '.pp-global-bar { flex-wrap: wrap; row-gap: .45em; }',
+      // Single view: progress row + subtitle row + transport row in the bar.
+      '.pp-global-bar { flex-direction: column; gap: .45em; }',
+      '.pp-global-progress { display: flex; align-items: center; gap: .6em;',
+      '  min-width: 0; }',
       '.pp-global-transport { display: flex; align-items: center; gap: .35em;',
       '  width: 100%; }',
       '.pp-global-transport-right { margin-left: auto; display: inline-flex;',
@@ -2525,10 +2527,12 @@
       '.pp-global-details-panel { max-height: 55vh; overflow: auto; padding: .5em .9em;',
       '  border-top: 1px solid var(--pp-border); }',
       '.pp-global-details-panel[hidden] { display: none; }',
-      '.pp-global-caption { padding: .3em .9em; font-size: .92em; line-height: 1.4;',
-      '  background: var(--pp-bg-alt); border-bottom: 1px solid var(--pp-border); }',
+      '.pp-global-caption { max-width: 42em; margin: 0 auto; padding: .4em 1em;',
+      '  font-size: .95em; line-height: 1.45; text-align: center;',
+      '  background: rgb(0 0 0 / .78); color: #fff; border-radius: 10px; }',
       '.pp-global-caption[hidden] { display: none; }',
-      '.pp-global-caption .pp-cue-speaker { font-weight: 700; }',
+      '.pp-global-caption .pp-cue-speaker { font-weight: 700;',
+      '  color: var(--pp-accent); }',
       '.pp-global-reopen { position: fixed; right: 1em;',
       '  bottom: calc(1em + env(safe-area-inset-bottom)); z-index: 9001;',
       '  width: 56px; height: 56px; min-width: 56px; min-height: 56px; padding: 0;',
@@ -2684,11 +2688,14 @@
 
     var bar = document.createElement('div');
     bar.className = 'pp-global-bar';
+    var progressRow = document.createElement('div');
+    progressRow.className = 'pp-global-progress';
+    bar.appendChild(progressRow);
     var cover = document.createElement('img');
     cover.className = 'pp-global-cover';
     cover.alt = '';
     cover.addEventListener('error', function () { cover.style.display = 'none'; });
-    bar.appendChild(cover);
+    progressRow.appendChild(cover);
     var meta = document.createElement('div');
     meta.className = 'pp-global-meta';
     var title = document.createElement('span');
@@ -2697,37 +2704,45 @@
     var now = document.createElement('span');
     now.className = 'pp-global-now';
     meta.appendChild(now);
-    bar.appendChild(meta);
+    progressRow.appendChild(meta);
     var scrub = document.createElement('input');
     scrub.type = 'range';
     scrub.className = 'pp-global-scrubber';
     scrub.min = 0; scrub.max = 0; scrub.step = 1; scrub.value = 0;
     scrub.setAttribute('aria-label', settings.labels.position);
-    bar.appendChild(scrub);
+    progressRow.appendChild(scrub);
     var time = document.createElement('span');
     time.className = 'pp-global-time';
     time.setAttribute('aria-live', 'off');
-    bar.appendChild(time);
+    progressRow.appendChild(time);
     var navPrev = document.createElement('button');
     navPrev.type = 'button';
     navPrev.className = 'podcast-player-btn pp-btn pp-global-prev';
     navPrev.setAttribute('aria-label', settings.labels.prevEp);
     navPrev.appendChild(icon('chapPrev'));
     navPrev.disabled = true;
-    bar.appendChild(navPrev);
+    progressRow.appendChild(navPrev);
     var play = document.createElement('button');
     play.type = 'button';
     play.className = 'podcast-player-btn pp-btn pp-global-play';
     play.setAttribute('aria-label', settings.labels.play);
     play.appendChild(icon('play'));
-    bar.appendChild(play);
+    progressRow.appendChild(play);
     var navNext = document.createElement('button');
     navNext.type = 'button';
     navNext.className = 'podcast-player-btn pp-btn pp-global-next';
     navNext.setAttribute('aria-label', settings.labels.nextEp);
     navNext.appendChild(icon('chapNext'));
     navNext.disabled = true;
-    bar.appendChild(navNext);
+    progressRow.appendChild(navNext);
+
+    // Subtitle row: the active cue, integrated inside the player between
+    // the progress row and the transport row.
+    var gCaption = document.createElement('div');
+    gCaption.className = 'pp-global-caption';
+    gCaption.hidden = true;
+    bar.appendChild(gCaption);
+    gAudio._captionEl = gCaption;
 
     // Single-view transport row: everything lives in the bar.
     var transport = document.createElement('div');
@@ -2896,12 +2911,6 @@
     });
     gAudio.addEventListener('ratechange', function () { updatePositionState(gAudio); });
 
-    // Captions strip: the active cue lives in the bottom player.
-    var gCaption = document.createElement('div');
-    gCaption.className = 'pp-global-caption';
-    gCaption.hidden = true;
-    gWrap.appendChild(gCaption);
-    gAudio._captionEl = gCaption;
     // "Details" panel: chapters/transcript/bookmarks, collapsed by default.
     var details = document.createElement('div');
     details.className = 'pp-global-details-panel';

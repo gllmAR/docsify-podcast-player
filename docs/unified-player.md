@@ -106,11 +106,15 @@ bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 > dépliable ni d'en-tête dupliqué : le lecteur du bas est **une vue unique**
 > — rangée 1 (cover, titre, scrubber, temps) + rangée 2 (prev/next épisode,
 > back/forward, play, vitesse, CC, partage, détails, réduire, quitter).
-> Les sous-titres vivent dans la bande `.pp-global-caption` (cue actif,
-> synchro `timeupdate`). Chapitres/transcript/signets derrière le bouton
+> Chapitres/transcript/signets derrière le bouton
 > `≡` (`pp-global-details-btn`) → panneau `.pp-global-details-panel`,
 > replié par défaut, reconstruit à chaque épisode. Aucun lecteur dans le
 > corps de page (`doneEach` → surfaces compactes uniquement).
+>
+> **Évolution 1.7.3 — sous-titres intégrés dans le lecteur.** La rangée
+> `.pp-global-caption` vit **dans** la barre, entre la progression et le
+> transport (plus de bande séparée) : cue actif synchronisé au `timeupdate`,
+> style sous-titre (fond sombre arrondi, texte centré, locuteur accentué).
 >
 > **Évolution 1.7.0 — l'expérience vit dans le lecteur du bas.** Plus aucun
 > lecteur plein dans le corps de page : `doneEach` ne construit plus que des
