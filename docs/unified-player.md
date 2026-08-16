@@ -102,16 +102,19 @@ jusque-là)
 `reEnhance()` fait monter la surface en lecteur plein à la bascule ;
 bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 
+> **Évolution 1.7.2 — une seule vue, tout dans la barre.** Plus de panneau
+> dépliable ni d'en-tête dupliqué : le lecteur du bas est **une vue unique**
+> — rangée 1 (cover, titre, scrubber, temps) + rangée 2 (prev/next épisode,
+> back/forward, play, vitesse, CC, partage, détails, réduire, quitter).
+> Les sous-titres vivent dans la bande `.pp-global-caption` (cue actif,
+> synchro `timeupdate`). Chapitres/transcript/signets derrière le bouton
+> `≡` (`pp-global-details-btn`) → panneau `.pp-global-details-panel`,
+> replié par défaut, reconstruit à chaque épisode. Aucun lecteur dans le
+> corps de page (`doneEach` → surfaces compactes uniquement).
+>
 > **Évolution 1.7.0 — l'expérience vit dans le lecteur du bas.** Plus aucun
 > lecteur plein dans le corps de page : `doneEach` ne construit plus que des
-> surfaces compactes (même sur la page de l'épisode joué). Tous les
-> contrôles (progress + transport), les **sous-titres** (bande `.pp-global-caption`
-> au-dessus de la barre, CC dans le panneau) et les panneaux
-> chapitres/transcript/signets vivent dans le lecteur persistant, dans un
-> **panneau dépliable** (`pp-global-panel`, chevron `pp-global-expand`,
-> `aria-expanded`) — ouvert à chaque adoption de source (play, prev/next,
-> autoAdvance). Le panneau est reconstruit à chaque épisode
-> (`buildGlobalPanel`, listeners nettoyés via `cleanupMediaListeners`).
+> surfaces compactes (même sur la page de l'épisode joué).
 >
 > **Évolution 1.6.13 — cacher ≠ quitter.** « Réduire » (chevron, `pp-global-minimize`)
 > replie la barre **sans toucher à la lecture** ; « ✕ » (`pp-global-close`)
