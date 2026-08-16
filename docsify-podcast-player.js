@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.7.3';
+  var PLUGIN_VERSION = '1.7.4';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -2510,8 +2510,8 @@
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
       'body.pp-has-global { padding-bottom: 64px; }',
-      // Single view: progress row + subtitle row + transport row in the bar.
-      '.pp-global-bar { flex-direction: column; gap: .45em; }',
+      // Single view: progress row + subtitle overlay + transport row.
+      '.pp-global-bar { flex-direction: column; gap: .45em; position: relative; }',
       '.pp-global-progress { display: flex; align-items: center; gap: .6em;',
       '  min-width: 0; }',
       '.pp-global-transport { display: flex; align-items: center; gap: .35em;',
@@ -2527,9 +2527,14 @@
       '.pp-global-details-panel { max-height: 55vh; overflow: auto; padding: .5em .9em;',
       '  border-top: 1px solid var(--pp-border); }',
       '.pp-global-details-panel[hidden] { display: none; }',
-      '.pp-global-caption { max-width: 42em; margin: 0 auto; padding: .4em 1em;',
+      // Subtitle overlay anchored just above the bar: it never takes part
+      // in the layout, so multi-line cues do not move the interface.
+      '.pp-global-caption { position: absolute; bottom: 100%; left: 50%;',
+      '  transform: translateX(-50%); margin-bottom: .45em;',
+      '  max-width: min(42em, 92%); padding: .4em 1em;',
       '  font-size: .95em; line-height: 1.45; text-align: center;',
-      '  background: rgb(0 0 0 / .78); color: #fff; border-radius: 10px; }',
+      '  background: rgb(0 0 0 / .78); color: #fff; border-radius: 10px;',
+      '  pointer-events: none; }',
       '.pp-global-caption[hidden] { display: none; }',
       '.pp-global-caption .pp-cue-speaker { font-weight: 700;',
       '  color: var(--pp-accent); }',
@@ -2736,12 +2741,12 @@
     navNext.disabled = true;
     progressRow.appendChild(navNext);
 
-    // Subtitle row: the active cue, integrated inside the player between
-    // the progress row and the transport row.
+    // Subtitle overlay: above the bar, absolutely positioned — any number
+    // of lines never shifts the player UI.
     var gCaption = document.createElement('div');
     gCaption.className = 'pp-global-caption';
     gCaption.hidden = true;
-    bar.appendChild(gCaption);
+    bar.insertBefore(gCaption, bar.firstChild);
     gAudio._captionEl = gCaption;
 
     // Single-view transport row: everything lives in the bar.

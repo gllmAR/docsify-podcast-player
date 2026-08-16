@@ -112,9 +112,15 @@ bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 > corps de page (`doneEach` → surfaces compactes uniquement).
 >
 > **Évolution 1.7.3 — sous-titres intégrés dans le lecteur.** La rangée
-> `.pp-global-caption` vit **dans** la barre, entre la progression et le
-> transport (plus de bande séparée) : cue actif synchronisé au `timeupdate`,
-> style sous-titre (fond sombre arrondi, texte centré, locuteur accentué).
+> `.pp-global-caption` vit **dans** la barre (cue actif synchronisé au
+> `timeupdate`, style sous-titre : fond sombre arrondi, texte centré,
+> locuteur accentué).
+>
+> **Évolution 1.7.4 — overlay, jamais de décalage.** La rangée sous-titres
+> est positionnée en **absolu au-dessus de la barre** (`position: absolute;
+> bottom: 100%`, ancrée sur `.pp-global-bar` relative, `pointer-events:
+> none`) : **une ou plusieurs lignes de sous-titres ne déplacent jamais
+> l'interface** — le cue s'étend vers le haut, la barre reste fixe.
 >
 > **Évolution 1.7.0 — l'expérience vit dans le lecteur du bas.** Plus aucun
 > lecteur plein dans le corps de page : `doneEach` ne construit plus que des

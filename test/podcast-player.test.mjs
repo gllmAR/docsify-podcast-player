@@ -1655,6 +1655,13 @@ test('unified: captions live in the bottom player (not the page)', async () => {
   assert.ok(cap.closest('.pp-global-bar'), 'caption integrated inside the player');
   assert.equal(cap.hidden, false, 'caption visible at the cue');
   assert.match(cap.textContent, /Bonjour le monde/);
+  // The caption is an absolute overlay above the bar: multi-line cues never
+  // move the player UI (no layout participation).
+  const css = [...w.document.querySelectorAll('style')]
+    .map((s) => s.textContent).join('\n');
+  assert.match(css, /\.pp-global-caption \{[^}]*position: absolute[^}]*bottom: 100%/s,
+    'caption overlaid above the bar');
+  assert.match(css, /\.pp-global-bar \{[^}]*position: relative/s, 'bar anchors the overlay');
   assert.ok(!w.document.querySelector('.markdown-section .pp-caption'),
     'no caption element in the page body');
   // The CC toggle in the bottom panel controls the strip.
