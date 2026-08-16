@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.7.1';
+  var PLUGIN_VERSION = '1.7.2';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -142,7 +142,7 @@
       global: 'Lecteur',
       closeMini: 'Fermer le lecteur (arrête la lecture)',
       openMini: 'Rouvrir le lecteur', minimize: 'Réduire le lecteur',
-      expand: 'Déplier le lecteur', collapse: 'Replier le lecteur',
+      details: 'Détails (chapitres, transcript, signets)',
       help: 'Raccourcis clavier', closeHelp: 'Fermer',
       error: 'Erreur', retry: 'Réessayer',
       nowPlaying: 'En lecture', title: 'Épisode',
@@ -181,7 +181,7 @@
       global: 'Player',
       closeMini: 'Close player (stops playback)',
       openMini: 'Reopen player', minimize: 'Minimize player',
-      expand: 'Expand player', collapse: 'Collapse player',
+      details: 'Details (chapters, transcript, bookmarks)',
       help: 'Keyboard shortcuts', closeHelp: 'Close',
       error: 'Error', retry: 'Retry',
       nowPlaying: 'Now playing', title: 'Episode',
@@ -905,7 +905,6 @@
     close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
     bookmark: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg>',
     minimize: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>',
-    chevronUp: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="18 15 12 9 6 15"/></svg>',
   };
 
   function icon(name) {
@@ -2511,18 +2510,21 @@
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
       'body.pp-has-global { padding-bottom: 64px; }',
-      // Full player panel inside the bottom player (never in the page).
-      '.pp-global-panel { max-height: 62vh; overflow: auto; padding: .7em .9em;',
-      '  border-bottom: 1px solid var(--pp-border); background: var(--pp-bg); }',
-      '.pp-global-panel[hidden] { display: none; }',
-      // Mutually exclusive views: expanded → the mini bar is hidden.
-      '.pp-global.pp-expanded .pp-global-bar { display: none; }',
-      '.pp-global-panel-header { display: flex; align-items: center; gap: .6em;',
-      '  margin-bottom: .6em; }',
-      '.pp-global-panel-header .pp-global-cover { width: 52px; height: 52px; }',
-      '.pp-global-panel-header .pp-panel-share, .pp-global-panel-header .pp-panel-collapse,',
-      '.pp-global-panel-header .pp-panel-minimize, .pp-global-panel-header .pp-panel-close {',
-      '  flex: 0 0 auto; }',
+      // Single view: transport row inside the bar + "details" panel.
+      '.pp-global-bar { flex-wrap: wrap; row-gap: .45em; }',
+      '.pp-global-transport { display: flex; align-items: center; gap: .35em;',
+      '  width: 100%; }',
+      '.pp-global-transport-right { margin-left: auto; display: inline-flex;',
+      '  align-items: center; gap: .35em; }',
+      '.pp-global-speed { min-width: 3em; }',
+      '.pp-global-captions { min-width: 2.6em; font-weight: 700; }',
+      '.pp-global-captions[aria-pressed="true"] { color: var(--pp-accent);',
+      '  border-color: var(--pp-accent); }',
+      '.pp-global-details-btn[aria-expanded="true"] { color: var(--pp-accent);',
+      '  border-color: var(--pp-accent); }',
+      '.pp-global-details-panel { max-height: 55vh; overflow: auto; padding: .5em .9em;',
+      '  border-top: 1px solid var(--pp-border); }',
+      '.pp-global-details-panel[hidden] { display: none; }',
       '.pp-global-caption { padding: .3em .9em; font-size: .92em; line-height: 1.4;',
       '  background: var(--pp-bg-alt); border-bottom: 1px solid var(--pp-border); }',
       '.pp-global-caption[hidden] { display: none; }',
@@ -2667,8 +2669,8 @@
   var gLoadedRoute = ''; // docsify route where the current source lives
   var gSurfaces = [];  // live page-surface sync functions (pruned on enhance)
   var gReopenBtn = null; // floating "reopen the persistent bar" button
-  var gPanel = null;      // expandable full-player panel inside the bar
-  var gExpandBtn = null;  // chevron toggling the panel
+  var gDetails = null;      // "details" panel (chapters/transcript/bookmarks)
+  var gDetailsBtn = null;  // toggle button for it
 
   function ensureGlobalPlayer() {
     if (gAudio) return;
@@ -2726,36 +2728,105 @@
     navNext.appendChild(icon('chapNext'));
     navNext.disabled = true;
     bar.appendChild(navNext);
-    var expand = document.createElement('button');
-    expand.type = 'button';
-    expand.className = 'podcast-player-btn pp-btn pp-global-expand';
-    expand.setAttribute('aria-expanded', 'false');
-    expand.setAttribute('aria-label', settings.labels.expand);
-    expand.appendChild(icon('chevronUp'));
-    expand.addEventListener('click', function () { toggleGlobalPanel(); });
-    bar.appendChild(expand);
-    gExpandBtn = expand;
+
+    // Single-view transport row: everything lives in the bar.
+    var transport = document.createElement('div');
+    transport.className = 'pp-global-transport';
+    bar.appendChild(transport);
+    var backSec = settings.backForward || settings.seekSeconds || 10;
+    var back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'podcast-player-btn pp-btn pp-global-back';
+    back.setAttribute('aria-label', tpl(settings.labels.back, { s: backSec }));
+    back.appendChild(icon('back'));
+    back.addEventListener('click', function () {
+      gAudio.currentTime = Math.max(0, gAudio.currentTime - backSec);
+    });
+    transport.appendChild(back);
+    var forward = document.createElement('button');
+    forward.type = 'button';
+    forward.className = 'podcast-player-btn pp-btn pp-global-forward';
+    forward.setAttribute('aria-label', tpl(settings.labels.forward, { s: backSec }));
+    forward.appendChild(icon('forward'));
+    forward.addEventListener('click', function () {
+      gAudio.currentTime = Math.min(gAudio.duration || Infinity, gAudio.currentTime + backSec);
+    });
+    transport.appendChild(forward);
+    var right = document.createElement('span');
+    right.className = 'pp-global-transport-right';
+    transport.appendChild(right);
+    var speedBtn = document.createElement('button');
+    speedBtn.type = 'button';
+    speedBtn.className = 'podcast-player-btn pp-btn pp-global-speed';
+    speedBtn.setAttribute('aria-label', tpl(settings.labels.speed, { x: 1 }));
+    speedBtn.textContent = '1\u00D7';
+    speedBtn.addEventListener('click', function () {
+      var opts = settings.speedOptions || [1];
+      var cur = gAudio.playbackRate || 1;
+      var next = opts[0];
+      for (var i = 0; i < opts.length; i++) {
+        if (Math.abs(opts[i] - cur) < 0.001) { next = opts[(i + 1) % opts.length]; break; }
+      }
+      gAudio.playbackRate = next;
+      try { sessionStorage.setItem(speedKey(gAudio), String(next)); } catch (_) { /* ignore */ }
+      speedBtn.textContent = next + '\u00D7';
+      speedBtn.setAttribute('aria-label', tpl(settings.labels.speed, { x: next }));
+      announce(gWrap, tpl(settings.labels.speedChanged, { x: next }));
+      updatePositionState(gAudio);
+    });
+    right.appendChild(speedBtn);
+    var ccBtn = document.createElement('button');
+    ccBtn.type = 'button';
+    ccBtn.className = 'podcast-player-btn pp-btn pp-global-captions';
+    ccBtn.setAttribute('aria-pressed', 'false');
+    ccBtn.setAttribute('aria-label', settings.labels.captions);
+    ccBtn.textContent = 'CC';
+    ccBtn.addEventListener('click', function () {
+      gAudio._captionsOn = !gAudio._captionsOn;
+      try { sessionStorage.setItem('pp-captions', gAudio._captionsOn ? '1' : '0'); } catch (_) { /* ignore */ }
+      ccBtn.setAttribute('aria-pressed', gAudio._captionsOn ? 'true' : 'false');
+      announce(gWrap, gAudio._captionsOn ? settings.labels.captionsOn : settings.labels.captionsOff);
+      if (gAudio._captionsOn && !gAudio._cues) {
+        loadCuesFor(gAudio).then(function (cues) {
+          gAudio._cues = cues || [];
+          updateCaption(gAudio);
+        });
+      } else {
+        updateCaption(gAudio);
+      }
+    });
+    right.appendChild(ccBtn);
     var shareBtn = document.createElement('button');
     shareBtn.type = 'button';
     shareBtn.className = 'podcast-player-btn pp-btn pp-global-share';
     shareBtn.setAttribute('aria-label', settings.labels.share);
     shareBtn.appendChild(icon('share'));
     shareBtn.addEventListener('click', shareCurrent);
-    bar.appendChild(shareBtn);
+    right.appendChild(shareBtn);
+    var detailsBtn = document.createElement('button');
+    detailsBtn.type = 'button';
+    detailsBtn.className = 'podcast-player-btn pp-btn pp-global-details-btn';
+    detailsBtn.setAttribute('aria-expanded', 'false');
+    detailsBtn.setAttribute('aria-label', settings.labels.details);
+    detailsBtn.textContent = '\u2261';
+    detailsBtn.title = settings.labels.details;
+    detailsBtn.addEventListener('click', function () { toggleGlobalDetails(); });
+    right.appendChild(detailsBtn);
+    gDetailsBtn = detailsBtn;
     var minimize = document.createElement('button');
     minimize.type = 'button';
     minimize.className = 'podcast-player-btn pp-btn pp-global-minimize';
     minimize.setAttribute('aria-label', settings.labels.minimize);
     minimize.title = settings.labels.minimize;
     minimize.appendChild(icon('minimize'));
-    bar.appendChild(minimize);
+    right.appendChild(minimize);
     var close = document.createElement('button');
     close.type = 'button';
     close.className = 'podcast-player-btn pp-btn pp-global-close';
     close.setAttribute('aria-label', settings.labels.closeMini);
     close.title = settings.labels.closeMini;
     close.appendChild(icon('close'));
-    bar.appendChild(close);
+    right.appendChild(close);
 
     play.addEventListener('click', function () {
       if (gAudio.paused) playMedia(gAudio); else gAudio.pause();
@@ -2825,19 +2896,18 @@
     });
     gAudio.addEventListener('ratechange', function () { updatePositionState(gAudio); });
 
-    // The full player UI — controls, captions, chapters/transcript/
-    // bookmarks panels — lives INSIDE the bottom player (expandable),
-    // never in the page body.
-    var panel = document.createElement('div');
-    panel.className = 'pp-global-panel';
-    panel.hidden = true;
-    gPanel = panel;
-    gWrap.appendChild(panel);
+    // Captions strip: the active cue lives in the bottom player.
     var gCaption = document.createElement('div');
     gCaption.className = 'pp-global-caption';
     gCaption.hidden = true;
     gWrap.appendChild(gCaption);
     gAudio._captionEl = gCaption;
+    // "Details" panel: chapters/transcript/bookmarks, collapsed by default.
+    var details = document.createElement('div');
+    details.className = 'pp-global-details-panel';
+    details.hidden = true;
+    gWrap.appendChild(details);
+    gDetails = details;
 
     gWrap.appendChild(bar);
     gWrap.hidden = true;
@@ -2876,120 +2946,26 @@
     if (gReopenBtn) gReopenBtn.hidden = true;
   }
 
-  // Build (or rebuild) the full player UI inside the bottom player:
-  // controls, panels (chapters/transcript/bookmarks) and the captions
-  // preference all live here — the page never hosts them.
-  function buildGlobalPanel() {
-    if (!gPanel) return;
+  // Build (or rebuild) the "details" panel of the bottom player:
+  // chapters/transcript/bookmarks — collapsed by default, never in the page.
+  function buildGlobalDetails() {
+    if (!gDetails) return;
     cleanupMediaListeners(gAudio);
-    gPanel.innerHTML = '';
-
-    // Expanded-view header: the collapsed bar is hidden while the panel is
-    // open (mutually exclusive views — no duplicated controls).
-    var header = document.createElement('div');
-    header.className = 'pp-global-panel-header';
-    var hCover = document.createElement('img');
-    hCover.className = 'pp-global-cover';
-    hCover.alt = '';
-    hCover.addEventListener('error', function () { hCover.style.display = 'none'; });
-    header.appendChild(hCover);
-    var hMeta = document.createElement('div');
-    hMeta.className = 'pp-global-meta';
-    var hTitle = document.createElement('span');
-    hTitle.className = 'pp-global-title';
-    hMeta.appendChild(hTitle);
-    var hNow = document.createElement('span');
-    hNow.className = 'pp-global-now';
-    hMeta.appendChild(hNow);
-    header.appendChild(hMeta);
-    var hPrev = document.createElement('button');
-    hPrev.type = 'button';
-    hPrev.className = 'podcast-player-btn pp-btn pp-global-prev';
-    hPrev.setAttribute('aria-label', settings.labels.prevEp);
-    hPrev.appendChild(icon('chapPrev'));
-    hPrev.disabled = true;
-    hPrev.addEventListener('click', function () { globalFeedJump(-1); });
-    header.appendChild(hPrev);
-    var hNext = document.createElement('button');
-    hNext.type = 'button';
-    hNext.className = 'podcast-player-btn pp-btn pp-global-next';
-    hNext.setAttribute('aria-label', settings.labels.nextEp);
-    hNext.appendChild(icon('chapNext'));
-    hNext.disabled = true;
-    hNext.addEventListener('click', function () { globalFeedJump(1); });
-    header.appendChild(hNext);
-    var hShare = document.createElement('button');
-    hShare.type = 'button';
-    hShare.className = 'podcast-player-btn pp-btn pp-panel-share';
-    hShare.setAttribute('aria-label', settings.labels.share);
-    hShare.appendChild(icon('share'));
-    hShare.addEventListener('click', shareCurrent);
-    header.appendChild(hShare);
-    var hCollapse = document.createElement('button');
-    hCollapse.type = 'button';
-    hCollapse.className = 'podcast-player-btn pp-btn pp-panel-collapse';
-    hCollapse.setAttribute('aria-label', settings.labels.collapse);
-    hCollapse.appendChild(icon('minimize'));
-    hCollapse.addEventListener('click', function () { toggleGlobalPanel(); });
-    header.appendChild(hCollapse);
-    var hMin = document.createElement('button');
-    hMin.type = 'button';
-    hMin.className = 'podcast-player-btn pp-btn pp-panel-minimize';
-    hMin.setAttribute('aria-label', settings.labels.minimize);
-    hMin.appendChild(icon('minimize'));
-    hMin.addEventListener('click', function () { minimizeGlobal(); });
-    header.appendChild(hMin);
-    var hClose = document.createElement('button');
-    hClose.type = 'button';
-    hClose.className = 'podcast-player-btn pp-btn pp-panel-close';
-    hClose.setAttribute('aria-label', settings.labels.closeMini);
-    hClose.appendChild(icon('close'));
-    hClose.addEventListener('click', function () { quitGlobal(); });
-    header.appendChild(hClose);
-    gPanel.appendChild(header);
-
-    buildControls(gAudio, gAudio, gWrap, gPanel);
+    gDetails.innerHTML = '';
     var panels = document.createElement('div');
     panels.className = 'pp-panels';
-    gPanel.appendChild(panels);
+    gDetails.appendChild(panels);
     buildChapters(gAudio, gWrap, panels);
     buildTranscript(gAudio, gWrap, panels);
     buildBookmarks(gAudio, gAudio, gWrap, panels);
-    var captionsPref = '1';
-    try {
-      var cp = sessionStorage.getItem('pp-captions');
-      if (cp !== null) captionsPref = cp;
-    } catch (_) { /* ignore */ }
-    gAudio._captionsOn = captionsPref === '1';
-    if (gAudio._captionsBtn) {
-      gAudio._captionsBtn.setAttribute('aria-pressed', gAudio._captionsOn ? 'true' : 'false');
-    }
-    if (gAudio._captionsOn) {
-      loadCuesFor(gAudio).then(function (cues) {
-        gAudio._cues = cues || [];
-        updateCaption(gAudio);
-      });
-    }
-    updateTimeDisplay(gAudio);
   }
 
-  function openGlobalPanel(open) {
-    if (!gPanel) return;
-    gPanel.hidden = !open;
-    // Mutually exclusive views: expanded → the mini bar is hidden (its
-    // controls are duplicated by the panel header/body).
-    if (open) gWrap.classList.add('pp-expanded');
-    else gWrap.classList.remove('pp-expanded');
-    if (gExpandBtn) {
-      gExpandBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      gExpandBtn.setAttribute('aria-label', open ? settings.labels.collapse : settings.labels.expand);
-      gExpandBtn.innerHTML = '';
-      gExpandBtn.appendChild(icon(open ? 'minimize' : 'chevronUp'));
+  function toggleGlobalDetails() {
+    if (!gDetails) return;
+    gDetails.hidden = !gDetails.hidden;
+    if (gDetailsBtn) {
+      gDetailsBtn.setAttribute('aria-expanded', gDetails.hidden ? 'false' : 'true');
     }
-  }
-
-  function toggleGlobalPanel() {
-    openGlobalPanel(!gPanel || gPanel.hidden);
   }
 
   // Quit the persistent player: stop playback and unload the episode.
@@ -3291,8 +3267,22 @@
       }
     } catch (_) { /* ignore */ }
     attachHls(gAudio);
-    buildGlobalPanel();
-    openGlobalPanel(true);
+    buildGlobalDetails();
+    // Captions preference (per session) + cue load for the CC strip.
+    var captionsPref = '1';
+    try {
+      var cp = sessionStorage.getItem('pp-captions');
+      if (cp !== null) captionsPref = cp;
+    } catch (_) { /* ignore */ }
+    gAudio._captionsOn = captionsPref === '1';
+    var ccBtn = gWrap.querySelector('.pp-global-captions');
+    if (ccBtn) ccBtn.setAttribute('aria-pressed', gAudio._captionsOn ? 'true' : 'false');
+    if (gAudio._captionsOn) {
+      loadCuesFor(gAudio).then(function (cues) {
+        gAudio._cues = cues || [];
+        updateCaption(gAudio);
+      });
+    }
     updateMediaSession(gAudio, -1);
     showGlobalBar();
     syncGlobalBar();

@@ -1433,14 +1433,16 @@ test('unified: surface play loads the episode into the global player, page uncha
   assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
   const gTitle = w.document.querySelector('.pp-global-title');
   assert.equal(gTitle.textContent, 'Épisode 1');
-  // Triggering playback never changes the page interface: the experience
-  // lives in the bottom player (panel with all controls, open).
+  // Triggering playback never changes the page interface: the whole
+  // experience lives in the bottom player, single view.
   assert.ok(w.document.querySelector('.pp-surface'), 'page keeps its compact surface');
   assert.ok(!w.document.querySelector('.markdown-section .pp-controls'),
     'no player controls in the page body');
-  const panel = w.document.querySelector('.pp-global-panel');
-  assert.ok(panel, 'bottom player panel exists');
-  assert.equal(panel.hidden, false, 'bottom player panel open after play');
+  assert.ok(w.document.querySelector('.pp-global-back'), 'back control in the bar');
+  assert.ok(w.document.querySelector('.pp-global-speed'), 'speed control in the bar');
+  assert.ok(w.document.querySelector('.pp-global-captions'), 'CC control in the bar');
+  assert.equal(w.document.querySelector('.pp-global-details-panel').hidden, true,
+    'details panel collapsed by default');
   // Play event → pause UI on the bar AND on the page surface.
   fire(gAudio, 'play');
   assert.equal(w.document.querySelector('.pp-global-play').getAttribute('aria-label'), 'Pause');
@@ -1560,12 +1562,11 @@ test('unified: playing from a surface never changes the page interface', async (
   assert.ok(w.document.querySelector('.pp-global audio'), 'global audio still in body');
   assert.ok(w.document.querySelector('.pp-global-bar'), 'persistent bottom bar present');
   assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
-  // Everything moved into the bottom player.
-  const panel = w.document.querySelector('.pp-global-panel');
-  assert.ok(panel.querySelector('.pp-btn-play'), 'play control in the bottom panel');
-  assert.ok(panel.querySelector('.pp-btn-back'), 'back control in the bottom panel');
-  assert.ok(panel.querySelector('.pp-captions'), 'CC control in the bottom panel');
-  assert.ok(panel.querySelector('.pp-bookmark'), 'bookmark control in the bottom panel');
+  // Everything moved into the bottom player (single view).
+  assert.ok(w.document.querySelector('.pp-global-play'), 'play in the bar');
+  assert.ok(w.document.querySelector('.pp-global-back'), 'back in the bar');
+  assert.ok(w.document.querySelector('.pp-global-captions'), 'CC in the bar');
+  assert.ok(w.document.querySelector('.pp-global-details-btn'), 'details toggle in the bar');
 });
 
 test('unified: full-player chapter click seeks the global audio', async () => {
@@ -1633,10 +1634,8 @@ test('unified: the bottom player is the only player, on every page', async () =>
     'never a player in the page body');
   const banner = w.document.querySelector('.pp-now-playing');
   assert.ok(banner && banner.hidden, 'no banner on the playing page');
-  // The full player UI (controls + panels) stays in the bottom player.
-  assert.equal(w.document.querySelector('.pp-global-panel').hidden, false,
-    'bottom player panel still open');
-  assert.ok(w.document.querySelector('.pp-global-panel .pp-panels'),
+  // Chapters/transcript/bookmarks live in the bottom player's details panel.
+  assert.ok(w.document.querySelector('.pp-global-details-panel .pp-panels'),
     'chapters/transcript panels in the bottom player');
 });
 
@@ -1658,53 +1657,38 @@ test('unified: captions live in the bottom player (not the page)', async () => {
   assert.ok(!w.document.querySelector('.markdown-section .pp-caption'),
     'no caption element in the page body');
   // The CC toggle in the bottom panel controls the strip.
-  const cc = w.document.querySelector('.pp-global-panel .pp-captions');
-  assert.ok(cc, 'CC button in the bottom player panel');
+  const cc = w.document.querySelector('.pp-global-captions');
+  assert.ok(cc, 'CC button in the bottom player bar');
   cc.click();
   assert.equal(cap.hidden, true, 'captions hidden after toggle');
 });
 
-test('unified: the bottom player expands and collapses', async () => {
+test('unified: the player is a single view — one control set in the bar', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
-  const panel = w.document.querySelector('.pp-global-panel');
-  const btn = w.document.querySelector('.pp-global-expand');
-  assert.ok(btn, 'expand button present');
-  assert.equal(panel.hidden, false, 'panel open after play');
-  assert.equal(btn.getAttribute('aria-expanded'), 'true');
-  btn.click();
-  assert.equal(panel.hidden, true, 'panel collapses');
-  assert.equal(btn.getAttribute('aria-expanded'), 'false');
-  btn.click();
-  assert.equal(panel.hidden, false, 'panel reopens');
-});
-
-test('unified: expanded panel replaces the mini bar (no duplicated visible controls)', async () => {
-  const w = bootUnified();
-  w.document.querySelector('.pp-surface .pp-btn-play').click();
-  await new Promise((r) => setTimeout(r, 20));
-  const gWrap = w.document.querySelector('.pp-global');
-  assert.ok(gWrap.classList.contains('pp-expanded'), 'expanded state on the player');
-  // The panel header carries the full control set (mini bar is hidden).
-  const header = w.document.querySelector('.pp-global-panel-header');
-  assert.ok(header, 'panel header present');
-  assert.ok(header.querySelector('.pp-global-cover'), 'cover in the header');
-  assert.ok(header.querySelector('.pp-global-title'), 'title in the header');
-  assert.ok(header.querySelector('.pp-global-prev') && header.querySelector('.pp-global-next'),
-    'episode prev/next in the header');
-  assert.ok(header.querySelector('.pp-panel-share'), 'share in the header');
-  assert.ok(header.querySelector('.pp-panel-collapse'), 'collapse in the header');
-  assert.ok(header.querySelector('.pp-panel-minimize'), 'minimize in the header');
-  assert.ok(header.querySelector('.pp-panel-close'), 'close in the header');
-  // Collapse → mini bar back, panel hidden.
-  header.querySelector('.pp-panel-collapse').click();
-  assert.equal(w.document.querySelector('.pp-global-panel').hidden, true, 'panel collapsed');
-  assert.ok(!gWrap.classList.contains('pp-expanded'), 'mini bar visible again');
-  // Expand from the bar button.
-  w.document.querySelector('.pp-global-expand').click();
-  assert.equal(w.document.querySelector('.pp-global-panel').hidden, false, 'panel open again');
-  assert.ok(gWrap.classList.contains('pp-expanded'), 'expanded again');
+  // No expandable panel, no duplicated header: everything is in the bar.
+  assert.ok(!w.document.querySelector('.pp-global-panel'), 'no expandable panel');
+  assert.ok(!w.document.querySelector('.pp-global-expand'), 'no expand button');
+  const bar = w.document.querySelector('.pp-global-bar');
+  const controls = bar.querySelectorAll('.podcast-player-btn').length;
+  assert.equal(controls, 11, `bar carries the full control set (got ${controls})`);
+  assert.ok(bar.querySelector('.pp-global-back'), 'back in the bar');
+  assert.ok(bar.querySelector('.pp-global-forward'), 'forward in the bar');
+  assert.ok(bar.querySelector('.pp-global-speed'), 'speed in the bar');
+  assert.ok(bar.querySelector('.pp-global-captions'), 'CC in the bar');
+  assert.ok(bar.querySelector('.pp-global-share'), 'share in the bar');
+  assert.ok(bar.querySelector('.pp-global-details-btn'), 'details toggle in the bar');
+  assert.ok(bar.querySelector('.pp-global-minimize'), 'minimize in the bar');
+  assert.ok(bar.querySelector('.pp-global-close'), 'close in the bar');
+  // Details panel: collapsed by default, toggled by the details button.
+  const panel = w.document.querySelector('.pp-global-details-panel');
+  assert.equal(panel.hidden, true, 'details collapsed by default');
+  bar.querySelector('.pp-global-details-btn').click();
+  assert.equal(panel.hidden, false, 'details opens');
+  assert.equal(bar.querySelector('.pp-global-details-btn').getAttribute('aria-expanded'), 'true');
+  bar.querySelector('.pp-global-details-btn').click();
+  assert.equal(panel.hidden, true, 'details closes');
 });
 
 test('unified: no double player — native audio hidden inside the surface', () => {
@@ -1743,7 +1727,7 @@ test('unified: full-player play button retries when not ready yet', async () => 
   const gAudio = w.document.querySelector('.pp-global audio');
   let plays = 0;
   gAudio.play = () => { plays++; return Promise.reject(new Error('NotSupportedError')); };
-  w.document.querySelector('.pp-controls .pp-btn-play').click();
+  w.document.querySelector('.pp-global-play').click();
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(plays, 1);
   fire(gAudio, 'loadedmetadata');
