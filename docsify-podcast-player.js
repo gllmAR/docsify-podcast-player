@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.15';
+  var PLUGIN_VERSION = '1.6.16';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -559,7 +559,16 @@
 
     var loadFn = function () {
       if (chapterDataCache[url]) {
+        // Cache hit (re-render / re-enhance of the same episode): restore
+        // the exact state the fetch path would — chapters on the media
+        // (chapter nav buttons + keyboard), nav group visibility, ticks.
+        media._chapters = chapterDataCache[url];
+        if (media._chapGroupEl) media._chapGroupEl.hidden = false;
+        drawScrubberTicks(media);
         render(list, chapterDataCache[url]);
+        if (activeAudio === media || media.paused === false) {
+          updateMediaSession(media, playlist.findIndex(function(p) { return p.media === media; }));
+        }
         return;
       }
       list.textContent = '\u2026';

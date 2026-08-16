@@ -739,6 +739,35 @@ test('v2: mute button toggles aria-pressed and icon', () => {
   assert.equal(mute.getAttribute('aria-pressed'), 'false');
 });
 
+test('v3: chapter nav works when chapters come from the cache (re-render)', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 30)); // first load: fetch path
+  // Simulate docsify navigating away and back: the chapter data is served
+  // from the cache — state must be restored identically (nav group visible,
+  // buttons enabled, jumps working).
+  const section = w.document.querySelector('.markdown-section');
+  section.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
+  w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
+  await new Promise((r) => setTimeout(r, 20));
+  const audio = w.document.querySelector('audio');
+  const group = w.document.querySelector('.pp-group-chap');
+  assert.equal(group.hidden, false, 'chapter nav visible from the cache');
+  const next = w.document.querySelector('.pp-btn-chap-next');
+  const prev = w.document.querySelector('.pp-btn-chap-prev');
+  assert.ok(next && prev, 'chapter nav buttons present after re-render');
+  let t = 0;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  audio.play = () => {};
+  fire(audio, 'timeupdate');
+  assert.equal(next.disabled, false, 'next enabled inside the first chapter');
+  next.click();
+  assert.equal(t, 30, 'next chapter jumps to the chapter start');
+  prev.click();
+  assert.equal(t, 30, 'prev inside chapter 2 → back to its start');
+});
+
 test('v2: chapter prev/next buttons jump between chapters', () => {
   const w = boot(PAGE_HTML);
   return new Promise((resolve) => {
