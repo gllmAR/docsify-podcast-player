@@ -1433,9 +1433,14 @@ test('unified: surface play loads the episode into the global player, page uncha
   assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
   const gTitle = w.document.querySelector('.pp-global-title');
   assert.equal(gTitle.textContent, 'Épisode 1');
-  // Triggering playback never changes the page interface.
+  // Triggering playback never changes the page interface: the experience
+  // lives in the bottom player (panel with all controls, open).
   assert.ok(w.document.querySelector('.pp-surface'), 'page keeps its compact surface');
-  assert.ok(!w.document.querySelector('.pp-controls'), 'no full player pushed into the page');
+  assert.ok(!w.document.querySelector('.markdown-section .pp-controls'),
+    'no player controls in the page body');
+  const panel = w.document.querySelector('.pp-global-panel');
+  assert.ok(panel, 'bottom player panel exists');
+  assert.equal(panel.hidden, false, 'bottom player panel open after play');
   // Play event → pause UI on the bar AND on the page surface.
   fire(gAudio, 'play');
   assert.equal(w.document.querySelector('.pp-global-play').getAttribute('aria-label'), 'Pause');
@@ -1465,7 +1470,8 @@ test('unified: navigation keeps playing; new episode page shows a banner and swi
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(gAudio.getAttribute('src').indexOf('ep2.m3u8') !== -1, 'switched to episode B');
   assert.ok(w.document.querySelector('.pp-surface'), 'B page keeps its compact surface');
-  assert.ok(!w.document.querySelector('.pp-controls'), 'no full player on B');
+  assert.ok(!w.document.querySelector('.markdown-section .pp-controls'),
+    'no player controls in the page body');
   const banner2 = w.document.querySelector('.pp-now-playing');
   assert.ok(banner2 && banner2.hidden, 'banner hidden after switch');
 });
@@ -1547,11 +1553,19 @@ test('unified: playing from a surface never changes the page interface', async (
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(w.document.querySelector('.pp-surface'), 'page keeps the compact surface');
-  assert.ok(!w.document.querySelector('.pp-controls'), 'no full player in the page');
-  assert.ok(!w.document.querySelector('.pp-panels'), 'no panels in the page');
+  assert.ok(!w.document.querySelector('.markdown-section .pp-controls'),
+    'no player controls in the page body');
+  assert.ok(!w.document.querySelector('.markdown-section .pp-panels'),
+    'no panels in the page body');
   assert.ok(w.document.querySelector('.pp-global audio'), 'global audio still in body');
   assert.ok(w.document.querySelector('.pp-global-bar'), 'persistent bottom bar present');
   assert.equal(w.document.querySelector('.pp-global').hidden, false, 'bar visible');
+  // Everything moved into the bottom player.
+  const panel = w.document.querySelector('.pp-global-panel');
+  assert.ok(panel.querySelector('.pp-btn-play'), 'play control in the bottom panel');
+  assert.ok(panel.querySelector('.pp-btn-back'), 'back control in the bottom panel');
+  assert.ok(panel.querySelector('.pp-captions'), 'CC control in the bottom panel');
+  assert.ok(panel.querySelector('.pp-bookmark'), 'bookmark control in the bottom panel');
 });
 
 test('unified: full-player chapter click seeks the global audio', async () => {
@@ -1604,7 +1618,7 @@ test('unified: bound listeners do not accumulate across navigations', async () =
   assert.equal(net, snapshot, 'listener count returns to the baseline after cleanup');
 });
 
-test('unified: returning to the playing episode page shows the full player', async () => {
+test('unified: the bottom player is the only player, on every page', async () => {
   const w = bootUnified();
   w.document.querySelector('.pp-surface .pp-btn-play').click();
   await new Promise((r) => setTimeout(r, 20));
@@ -1614,8 +1628,56 @@ test('unified: returning to the playing episode page shows the full player', asy
   assert.ok(w.document.querySelector('.pp-surface'), 'B shows a compact surface');
   section.innerHTML = '<audio controls preload="none" src="ep.m3u8" data-title="Épisode 1"></audio>';
   w.$docsify.plugins.forEach((p) => p({ doneEach: (cb) => cb() }));
-  assert.ok(w.document.querySelector('.pp-controls'), 'back on A: full player bound');
-  assert.ok(!w.document.querySelector('.pp-now-playing'), 'no banner on the playing page');
+  assert.ok(w.document.querySelector('.pp-surface'), 'A keeps its compact surface');
+  assert.ok(!w.document.querySelector('.markdown-section .pp-controls'),
+    'never a player in the page body');
+  const banner = w.document.querySelector('.pp-now-playing');
+  assert.ok(banner && banner.hidden, 'no banner on the playing page');
+  // The full player UI (controls + panels) stays in the bottom player.
+  assert.equal(w.document.querySelector('.pp-global-panel').hidden, false,
+    'bottom player panel still open');
+  assert.ok(w.document.querySelector('.pp-global-panel .pp-panels'),
+    'chapters/transcript panels in the bottom player');
+});
+
+test('unified: captions live in the bottom player (not the page)', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 30)); // VTT fetch resolves
+  const gAudio = w.document.querySelector('.pp-global audio');
+  let t = 0;
+  Object.defineProperty(gAudio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  t = 2;
+  fire(gAudio, 'timeupdate');
+  const cap = w.document.querySelector('.pp-global-caption');
+  assert.ok(cap, 'caption strip in the bottom player');
+  assert.equal(cap.hidden, false, 'caption visible at the cue');
+  assert.match(cap.textContent, /Bonjour le monde/);
+  assert.ok(!w.document.querySelector('.markdown-section .pp-caption'),
+    'no caption element in the page body');
+  // The CC toggle in the bottom panel controls the strip.
+  const cc = w.document.querySelector('.pp-global-panel .pp-captions');
+  assert.ok(cc, 'CC button in the bottom player panel');
+  cc.click();
+  assert.equal(cap.hidden, true, 'captions hidden after toggle');
+});
+
+test('unified: the bottom player expands and collapses', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const panel = w.document.querySelector('.pp-global-panel');
+  const btn = w.document.querySelector('.pp-global-expand');
+  assert.ok(btn, 'expand button present');
+  assert.equal(panel.hidden, false, 'panel open after play');
+  assert.equal(btn.getAttribute('aria-expanded'), 'true');
+  btn.click();
+  assert.equal(panel.hidden, true, 'panel collapses');
+  assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  btn.click();
+  assert.equal(panel.hidden, false, 'panel reopens');
 });
 
 test('unified: no double player — native audio hidden inside the surface', () => {

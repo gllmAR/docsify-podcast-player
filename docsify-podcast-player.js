@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.16';
+  var PLUGIN_VERSION = '1.7.0';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -142,6 +142,7 @@
       global: 'Lecteur',
       closeMini: 'Fermer le lecteur (arrête la lecture)',
       openMini: 'Rouvrir le lecteur', minimize: 'Réduire le lecteur',
+      expand: 'Déplier le lecteur', collapse: 'Replier le lecteur',
       help: 'Raccourcis clavier', closeHelp: 'Fermer',
       error: 'Erreur', retry: 'Réessayer',
       nowPlaying: 'En lecture', title: 'Épisode',
@@ -180,6 +181,7 @@
       global: 'Player',
       closeMini: 'Close player (stops playback)',
       openMini: 'Reopen player', minimize: 'Minimize player',
+      expand: 'Expand player', collapse: 'Collapse player',
       help: 'Keyboard shortcuts', closeHelp: 'Close',
       error: 'Error', retry: 'Retry',
       nowPlaying: 'Now playing', title: 'Episode',
@@ -903,6 +905,7 @@
     close: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
     bookmark: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg>',
     minimize: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>',
+    chevronUp: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="18 15 12 9 6 15"/></svg>',
   };
 
   function icon(name) {
@@ -2508,6 +2511,14 @@
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
       'body.pp-has-global { padding-bottom: 64px; }',
+      // Full player panel inside the bottom player (never in the page).
+      '.pp-global-panel { max-height: 62vh; overflow: auto; padding: .7em .9em;',
+      '  border-bottom: 1px solid var(--pp-border); background: var(--pp-bg); }',
+      '.pp-global-panel[hidden] { display: none; }',
+      '.pp-global-caption { padding: .3em .9em; font-size: .92em; line-height: 1.4;',
+      '  background: var(--pp-bg-alt); border-bottom: 1px solid var(--pp-border); }',
+      '.pp-global-caption[hidden] { display: none; }',
+      '.pp-global-caption .pp-cue-speaker { font-weight: 700; }',
       '.pp-global-reopen { position: fixed; right: 1em;',
       '  bottom: calc(1em + env(safe-area-inset-bottom)); z-index: 9001;',
       '  width: 56px; height: 56px; min-width: 56px; min-height: 56px; padding: 0;',
@@ -2648,6 +2659,8 @@
   var gLoadedRoute = ''; // docsify route where the current source lives
   var gSurfaces = [];  // live page-surface sync functions (pruned on enhance)
   var gReopenBtn = null; // floating "reopen the persistent bar" button
+  var gPanel = null;      // expandable full-player panel inside the bar
+  var gExpandBtn = null;  // chevron toggling the panel
 
   function ensureGlobalPlayer() {
     if (gAudio) return;
@@ -2705,6 +2718,15 @@
     navNext.appendChild(icon('chapNext'));
     navNext.disabled = true;
     bar.appendChild(navNext);
+    var expand = document.createElement('button');
+    expand.type = 'button';
+    expand.className = 'podcast-player-btn pp-btn pp-global-expand';
+    expand.setAttribute('aria-expanded', 'false');
+    expand.setAttribute('aria-label', settings.labels.expand);
+    expand.appendChild(icon('chevronUp'));
+    expand.addEventListener('click', function () { toggleGlobalPanel(); });
+    bar.appendChild(expand);
+    gExpandBtn = expand;
     var shareBtn = document.createElement('button');
     shareBtn.type = 'button';
     shareBtn.className = 'podcast-player-btn pp-btn pp-global-share';
@@ -2763,18 +2785,21 @@
       updateMediaSession(gAudio, -1);
       setPlaybackState('playing');
       updatePositionState(gAudio);
+      syncPlayUI(gAudio, true);
       syncGlobalPlayUI(true);
       syncSurfaces(true);
       showGlobalBar(); // reappear if the user closed the bar
     });
     gAudio.addEventListener('pause', function () {
       setPlaybackState('paused');
+      syncPlayUI(gAudio, false);
       syncGlobalPlayUI(false);
       syncSurfaces(false);
     });
     gAudio.addEventListener('ended', function () {
       clearPosition(gAudio);
       setPlaybackState('paused');
+      syncPlayUI(gAudio, false);
       syncGlobalPlayUI(false);
       syncSurfaces(false);
       autoAdvanceNext();
@@ -2795,6 +2820,7 @@
     gAudio.addEventListener('timeupdate', function () {
       savePosition(gAudio);
       syncGlobalBar();
+      updateTimeDisplay(gAudio);
       updatePositionState(gAudio);
     });
     gAudio.addEventListener('durationchange', function () {
@@ -2802,6 +2828,20 @@
       updatePositionState(gAudio);
     });
     gAudio.addEventListener('ratechange', function () { updatePositionState(gAudio); });
+
+    // The full player UI — controls, captions, chapters/transcript/
+    // bookmarks panels — lives INSIDE the bottom player (expandable),
+    // never in the page body.
+    var panel = document.createElement('div');
+    panel.className = 'pp-global-panel';
+    panel.hidden = true;
+    gPanel = panel;
+    gWrap.appendChild(panel);
+    var gCaption = document.createElement('div');
+    gCaption.className = 'pp-global-caption';
+    gCaption.hidden = true;
+    gWrap.appendChild(gCaption);
+    gAudio._captionEl = gCaption;
 
     gWrap.appendChild(bar);
     gWrap.hidden = true;
@@ -2838,6 +2878,53 @@
     gWrap.hidden = false;
     document.body.classList.add('pp-has-global');
     if (gReopenBtn) gReopenBtn.hidden = true;
+  }
+
+  // Build (or rebuild) the full player UI inside the bottom player:
+  // controls, panels (chapters/transcript/bookmarks) and the captions
+  // preference all live here — the page never hosts them.
+  function buildGlobalPanel() {
+    if (!gPanel) return;
+    cleanupMediaListeners(gAudio);
+    gPanel.innerHTML = '';
+    buildControls(gAudio, gAudio, gWrap, gPanel);
+    var panels = document.createElement('div');
+    panels.className = 'pp-panels';
+    gPanel.appendChild(panels);
+    buildChapters(gAudio, gWrap, panels);
+    buildTranscript(gAudio, gWrap, panels);
+    buildBookmarks(gAudio, gAudio, gWrap, panels);
+    var captionsPref = '1';
+    try {
+      var cp = sessionStorage.getItem('pp-captions');
+      if (cp !== null) captionsPref = cp;
+    } catch (_) { /* ignore */ }
+    gAudio._captionsOn = captionsPref === '1';
+    if (gAudio._captionsBtn) {
+      gAudio._captionsBtn.setAttribute('aria-pressed', gAudio._captionsOn ? 'true' : 'false');
+    }
+    if (gAudio._captionsOn) {
+      loadCuesFor(gAudio).then(function (cues) {
+        gAudio._cues = cues || [];
+        updateCaption(gAudio);
+      });
+    }
+    updateTimeDisplay(gAudio);
+  }
+
+  function openGlobalPanel(open) {
+    if (!gPanel) return;
+    gPanel.hidden = !open;
+    if (gExpandBtn) {
+      gExpandBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      gExpandBtn.setAttribute('aria-label', open ? settings.labels.collapse : settings.labels.expand);
+      gExpandBtn.innerHTML = '';
+      gExpandBtn.appendChild(icon(open ? 'minimize' : 'chevronUp'));
+    }
+  }
+
+  function toggleGlobalPanel() {
+    openGlobalPanel(!gPanel || gPanel.hidden);
   }
 
   // Quit the persistent player: stop playback and unload the episode.
@@ -3116,6 +3203,8 @@
       }
     } catch (_) { /* ignore */ }
     attachHls(gAudio);
+    buildGlobalPanel();
+    openGlobalPanel(true);
     updateMediaSession(gAudio, -1);
     showGlobalBar();
     syncGlobalBar();
@@ -3143,24 +3232,6 @@
       data: data,
       coverUrl: coverUrl,
     });
-  }
-
-  // Rebuild a page <audio>'s UI according to the global state: full player
-  // when it is the loaded source, compact surface otherwise.
-  function reEnhance(el) {
-    if (!el || !el.parentNode) return;
-    var host = el._ppHost || el.parentNode;
-    if (el._ppSurface) { el._ppSurface.remove(); el._ppSurface = null; }
-    var oldWrap = el.closest('.podcast-player');
-    if (oldWrap) oldWrap.remove();
-    el.dataset.podcastEnhanced = '';
-    if (!el.isConnected && host) host.insertBefore(el, host.firstChild);
-    if (settings.unified) {
-      if (globalIsCurrent(el)) enhance(el, 0, gAudio);
-      else unifiedEnhance(el, 0);
-    } else {
-      enhance(el, 0);
-    }
   }
 
   function globalIsCurrent(el) {
@@ -3310,12 +3381,8 @@
         playlist.push({ el: el });
       });
       playlist.forEach(function (entry, i) {
-        if (settings.unified) {
-          if (gLoadedSrc && globalIsCurrent(entry.el)) enhance(entry.el, i, gAudio);
-          else unifiedEnhance(entry.el, i);
-        } else {
-          enhance(entry.el, i);
-        }
+        if (settings.unified) unifiedEnhance(entry.el, i);
+        else enhance(entry.el, i);
       });
 
       root.querySelectorAll('video').forEach(attachHls);

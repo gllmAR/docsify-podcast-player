@@ -57,7 +57,10 @@ player** that survives docsify navigation:
   never destroyed by page swaps — playback **continues when you change
   pages**.
 - Page `<audio>` elements become compact **surfaces** (cover, title, play,
-  download, resume chip); play loads the episode into the global player.
+  download, resume chip); play loads the episode into the global player —
+  **the page never hosts a player**: all controls, captions (CC line),
+  chapters/transcript/bookmarks panels live in the bottom player's
+  expandable panel (`pp-global-expand`).
 - While another episode is playing, pages show a **« En lecture : X »**
   banner with a one-click switch.
 - Resume (localStorage), speed, HLS retry and MediaSession all apply to the

@@ -102,6 +102,17 @@ jusque-là)
 `reEnhance()` fait monter la surface en lecteur plein à la bascule ;
 bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 
+> **Évolution 1.7.0 — l'expérience vit dans le lecteur du bas.** Plus aucun
+> lecteur plein dans le corps de page : `doneEach` ne construit plus que des
+> surfaces compactes (même sur la page de l'épisode joué). Tous les
+> contrôles (progress + transport), les **sous-titres** (bande `.pp-global-caption`
+> au-dessus de la barre, CC dans le panneau) et les panneaux
+> chapitres/transcript/signets vivent dans le lecteur persistant, dans un
+> **panneau dépliable** (`pp-global-panel`, chevron `pp-global-expand`,
+> `aria-expanded`) — ouvert à chaque adoption de source (play, prev/next,
+> autoAdvance). Le panneau est reconstruit à chaque épisode
+> (`buildGlobalPanel`, listeners nettoyés via `cleanupMediaListeners`).
+>
 > **Évolution 1.6.13 — cacher ≠ quitter.** « Réduire » (chevron, `pp-global-minimize`)
 > replie la barre **sans toucher à la lecture** ; « ✕ » (`pp-global-close`)
 > **quitte** : arrête la lecture, détruit le HLS et décharge l'épisode
