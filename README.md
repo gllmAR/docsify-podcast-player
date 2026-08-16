@@ -38,6 +38,10 @@ browser — so the repo never has to store the m4a.
 - **Bookmarks** — the bookmark button marks/unmarks the current position
   (toggle within 3 s); a "Signets" panel lists per-episode bookmarks
   (localStorage) with seek + delete buttons.
+- **Captions (CC)** — the active WebVTT cue is shown in a caption line under
+  the controls, synchronized with playback (same cue data as the transcript,
+  one fetch per episode); CC button in the transport toggles them
+  (remembered per session).
 - **Transcript** — the WebVTT subtitles track becomes a toggleable, clickable
   transcript (each cue seeks the player); speaker labels (`<v …>` tags) are
   styled separately, the active cue is highlighted and auto-scrolled.

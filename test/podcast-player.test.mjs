@@ -842,6 +842,53 @@ test('v3: bookmarks — mark at current position, list, seek, toggle remove', ()
   assert.ok(w.document.querySelector('.pp-bookmark-empty'), 'empty state shown');
 });
 
+test('v3: captions show the active VTT cue during playback (synced)', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 30)); // VTT fetch resolves
+  const audio = w.document.querySelector('audio');
+  let t = 0;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  const cap = w.document.querySelector('.pp-caption');
+  assert.ok(cap, 'caption line present');
+  t = 2;
+  fire(audio, 'timeupdate');
+  assert.equal(cap.hidden, false, 'caption visible inside the cue');
+  assert.match(cap.textContent, /Bonjour le monde/);
+  assert.match(cap.textContent, /Hôte/, 'speaker name shown');
+  t = 4.5; // gap between the two cues
+  fire(audio, 'timeupdate');
+  assert.equal(cap.hidden, true, 'caption hidden between cues (end time respected)');
+  t = 6;
+  fire(audio, 'timeupdate');
+  assert.match(cap.textContent, /Deuxième ligne/);
+});
+
+test('v3: captions toggle (CC button) hides and shows the line', async () => {
+  const w = boot(PAGE_HTML);
+  await new Promise((r) => setTimeout(r, 30));
+  const audio = w.document.querySelector('audio');
+  let t = 2;
+  Object.defineProperty(audio, 'currentTime', {
+    get: () => t, set: (v) => { t = v; }, configurable: true,
+  });
+  const cap = w.document.querySelector('.pp-caption');
+  const cc = w.document.querySelector('.pp-captions');
+  assert.ok(cc, 'CC button present');
+  assert.equal(cc.getAttribute('aria-pressed'), 'true', 'captions on by default');
+  fire(audio, 'timeupdate');
+  assert.equal(cap.hidden, false);
+  cc.click();
+  assert.equal(cc.getAttribute('aria-pressed'), 'false');
+  fire(audio, 'timeupdate');
+  assert.equal(cap.hidden, true, 'hidden after toggle off');
+  cc.click();
+  assert.equal(cc.getAttribute('aria-pressed'), 'true');
+  fire(audio, 'timeupdate');
+  assert.equal(cap.hidden, false, 'visible again after toggle on');
+});
+
 test('v3: bookmark button reflects a bookmark at the current position', () => {
   const w = boot(PAGE_HTML);
   const audio = w.document.querySelector('audio');

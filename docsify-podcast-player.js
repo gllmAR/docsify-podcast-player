@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.6.13';
+  var PLUGIN_VERSION = '1.6.14';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -92,6 +92,7 @@
     showVolume: true,
     showChapterNav: true,
     showBookmarks: true,              // bookmark button + panel (localStorage)
+    showCaptions: true,               // CC line showing the active VTT cue
     backForward: 10,                  // back/forward buttons (seconds)
     speedOptions: [0.75, 1, 1.25, 1.5, 2],
     transcriptFollow: true,
@@ -131,6 +132,8 @@
       followResumed: 'Suivi de la lecture repris',
       cueAt: 'Écouter à {t}',
       resume: 'Reprendre à {t}',
+      captions: 'Sous-titres',
+      captionsOn: 'Sous-titres affichés', captionsOff: 'Sous-titres masqués',
       bookmark: 'Marquer', bookmarks: 'Signets',
       bookmarkAdded: 'Signet ajouté à {t}',
       bookmarkRemoved: 'Signet retiré à {t}',
@@ -167,6 +170,8 @@
       followResumed: 'Playback following resumed',
       cueAt: 'Listen at {t}',
       resume: 'Resume at {t}',
+      captions: 'Captions',
+      captionsOn: 'Captions shown', captionsOff: 'Captions hidden',
       bookmark: 'Bookmark', bookmarks: 'Bookmarks',
       bookmarkAdded: 'Bookmark added at {t}',
       bookmarkRemoved: 'Bookmark removed at {t}',
@@ -611,13 +616,66 @@
       if (idx === -1) return;
       var times = lines[idx].split('-->');
       var start = parseVttTime(times[0].trim());
+      var end = parseVttTime(times[1].trim());
       var body = lines.slice(idx + 1).join(' ').trim();
-      if (body) cues.push({ start: start, text: body });
+      if (body) cues.push({ start: start, end: end, text: body });
     });
     return cues;
   }
 
   var transcriptCache = {};
+
+  // Shared VTT loader: the transcript panel and the caption line both draw
+  // from transcriptCache (one fetch per episode).
+  function loadCuesFor(media) {
+    var el = media._sourceEl || media;
+    var url = transcriptUrl(el);
+    if (!url) return Promise.resolve(null);
+    if (transcriptCache[url]) return Promise.resolve(transcriptCache[url]);
+    if (media._cuesLoading) return media._cuesLoading;
+    media._cuesLoading = fetch(url).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.text();
+    }).then(function (text) {
+      var cues = parseVtt(text);
+      transcriptCache[url] = cues;
+      return cues;
+    }).catch(function () { return null; });
+    return media._cuesLoading;
+  }
+
+  // Caption line: show the active VTT cue (synced on every timeupdate).
+  function updateCaption(media) {
+    var el = media._captionEl;
+    if (!el) return;
+    el.textContent = '';
+    el.hidden = true;
+    if (!media._captionsOn) return;
+    var cues = media._cues;
+    if (!cues || !cues.length) return;
+    var t = media.currentTime || 0;
+    var cue = null;
+    for (var i = 0; i < cues.length; i++) {
+      if (t >= cues[i].start && t < cues[i].end) { cue = cues[i]; break; }
+      if (t < cues[i].start) break;
+    }
+    if (!cue) return;
+    // Speaker label if present: "<v Hôte>…</v>" → styled element.
+    var voice = /^<v\s+([^>]*)>(.*)<\/v>\s*$/i.exec(cue.text);
+    var text = voice ? (voice[2] || '') : cue.text;
+    text = text.replace(/<[^>]+>/g, '').trim();      // strip inner tags
+    if (!text) return;
+    if (voice) {
+      var sp = document.createElement('span');
+      sp.className = 'pp-cue-speaker';
+      sp.textContent = (voice[1] || '').trim();
+      el.appendChild(sp);
+      el.appendChild(document.createTextNode(' ' + text));
+    } else {
+      el.appendChild(document.createTextNode(text));
+    }
+    el.hidden = false;
+  }
 
   function buildTranscript(media, wrap, panels) {
     if (!settings.showTranscript) return;
@@ -1093,6 +1151,32 @@
       settingsGroup.appendChild(bm);
     }
 
+    // ── Captions (CC): show the active subtitle cue during playback ──
+    if (settings.showCaptions) {
+      var cc = document.createElement('button');
+      cc.type = 'button';
+      cc.className = 'podcast-player-btn pp-btn pp-captions';
+      cc.setAttribute('aria-pressed', 'false');
+      cc.setAttribute('aria-label', settings.labels.captions);
+      cc.textContent = 'CC';
+      media._captionsBtn = cc;
+      cc.addEventListener('click', function () {
+        media._captionsOn = !media._captionsOn;
+        try { sessionStorage.setItem('pp-captions', media._captionsOn ? '1' : '0'); } catch (_) { /* ignore */ }
+        cc.setAttribute('aria-pressed', media._captionsOn ? 'true' : 'false');
+        announce(wrap, media._captionsOn ? settings.labels.captionsOn : settings.labels.captionsOff);
+        if (media._captionsOn && !media._cues) {
+          loadCuesFor(media).then(function (cues) {
+            media._cues = cues || [];
+            updateCaption(media);
+          });
+        } else {
+          updateCaption(media);
+        }
+      });
+      settingsGroup.appendChild(cc);
+    }
+
     return controls;
   }
 
@@ -1249,6 +1333,7 @@
       media._chapNextBtn.disabled = ch < 0 || ch >= media._chapters.length - 1;
     }
     updateBookmarkButton(media);
+    updateCaption(media);
   }
 
   function chapterIndexAt(media, t) {
@@ -2003,6 +2088,28 @@
     // Download sits next to the title (toolbar), not inside the transport.
     buildDownload(el, wrap, bar);
 
+    // Caption line (active VTT cue), between the controls and the panels.
+    var caption = document.createElement('div');
+    caption.className = 'pp-caption';
+    caption.hidden = true;
+    card.appendChild(caption);
+    media._captionEl = caption;
+    var captionsPref = '1';
+    try {
+      var cp = sessionStorage.getItem('pp-captions');
+      if (cp !== null) captionsPref = cp;
+    } catch (_) { /* ignore */ }
+    media._captionsOn = captionsPref === '1';
+    if (media._captionsBtn) {
+      media._captionsBtn.setAttribute('aria-pressed', media._captionsOn ? 'true' : 'false');
+    }
+    if (media._captionsOn) {
+      loadCuesFor(media).then(function (cues) {
+        media._cues = cues || [];
+        updateCaption(media);
+      });
+    }
+
     var panels = document.createElement('div');
     panels.className = 'pp-panels';
     card.appendChild(panels);
@@ -2223,6 +2330,15 @@
       '.pp-resume { color: var(--pp-accent); border-color: var(--pp-accent); }',
       '.pp-meta .pp-resume { align-self: flex-start; margin-top: .5em; }',
       '.pp-bookmark[aria-pressed="true"] { color: var(--pp-accent);',
+      '  border-color: var(--pp-accent); }',
+      // ── Captions (CC line) ──
+      '.pp-caption { margin: 0; padding: .45em .7em; border-radius: 8px;',
+      '  background: var(--pp-bg-alt); border: 1px solid var(--pp-border);',
+      '  font-size: .95em; line-height: 1.45; }',
+      '.pp-caption[hidden] { display: none; }',
+      '.pp-caption .pp-cue-speaker { font-weight: 700; }',
+      '.pp-captions { min-width: 2.6em; font-weight: 700; }',
+      '.pp-captions[aria-pressed="true"] { color: var(--pp-accent);',
       '  border-color: var(--pp-accent); }',
       // ── Bookmarks panel ──
       '.podcast-player-bookmarks { font-size: .92em; }',
@@ -3215,6 +3331,7 @@
       helpDialog: user.helpDialog !== undefined ? user.helpDialog : DEFAULTS.helpDialog,
       resumeChip: user.resumeChip !== undefined ? user.resumeChip : DEFAULTS.resumeChip,
       showBookmarks: user.showBookmarks !== undefined ? user.showBookmarks : DEFAULTS.showBookmarks,
+      showCaptions: user.showCaptions !== undefined ? user.showCaptions : DEFAULTS.showCaptions,
       downloadSw: user.downloadSw !== undefined ? user.downloadSw : DEFAULTS.downloadSw,
       unified: user.unified !== undefined ? user.unified : DEFAULTS.unified,
       feedUrl: user.feedUrl !== undefined ? user.feedUrl : DEFAULTS.feedUrl,
