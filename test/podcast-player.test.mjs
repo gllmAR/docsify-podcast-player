@@ -1699,6 +1699,23 @@ test('unified: the player is a single view — one control set in the bar', asyn
   assert.equal(panel.hidden, true, 'details closes');
 });
 
+test('unified: the player adapts to the docsify sidebar (no encroachment)', async () => {
+  const w = bootUnified();
+  w.document.querySelector('.pp-surface .pp-btn-play').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const gWrap = w.document.querySelector('.pp-global');
+  assert.equal(gWrap.style.left, '', 'no sidebar → full width');
+  // A sidebar appears (e.g. theme toggle / resize): the player must start
+  // at its right edge.
+  const sb = w.document.createElement('aside');
+  sb.className = 'sidebar';
+  w.document.body.appendChild(sb);
+  Object.defineProperty(sb, 'offsetWidth', { value: 300, configurable: true });
+  w.dispatchEvent(new w.Event('resize'));
+  await new Promise((r) => setTimeout(r, 250)); // debounce
+  assert.equal(gWrap.style.left, '300px', 'player starts right of the sidebar');
+});
+
 test('unified: no double player — native audio hidden inside the surface', () => {
   const w = bootUnified();
   const surface = w.document.querySelector('.pp-surface');

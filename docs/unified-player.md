@@ -122,6 +122,15 @@ bandeau avec lien « Aller à la page » via `gLoadedRoute` ; tests +2)
 > none`) : **une ou plusieurs lignes de sous-titres ne déplacent jamais
 > l'interface** — le cue s'étend vers le haut, la barre reste fixe.
 >
+> **Évolution 1.7.5 — une ligne, responsive, sans empiéter sur la sidebar.**
+> La barre est **condensée en une seule ligne** (cover · titre · scrubber ·
+> temps · nav prev/back/play/forward/next · réglages vitesse/CC/partage/
+> détails/réduire/quitter) qui **passe en wrap** sur les petits écrans.
+> Sous-titres : overlay centré (max 42 em, 92 %) qui s'étend vers le haut —
+> expandable, jamais de décalage. Le lecteur **s'adapte à la sidebar
+> docsify** : `adaptToSidebar()` le décale du bord droit de `.sidebar`
+> (recalculé au resize, debounce 150 ms).
+>
 > **Évolution 1.7.0 — l'expérience vit dans le lecteur du bas.** Plus aucun
 > lecteur plein dans le corps de page : `doneEach` ne construit plus que des
 > surfaces compactes (même sur la page de l'épisode joué).

@@ -54,7 +54,7 @@
 
   // Plugin release — version-pins the service worker script URL (?v=) so
   // browsers force an SW update as soon as a new release ships.
-  var PLUGIN_VERSION = '1.7.4';
+  var PLUGIN_VERSION = '1.7.5';
 
   // ── v1 defaults (backwards compatible) ──────────────────────────────
   var DEFAULTS = {
@@ -2510,12 +2510,9 @@
       '.pp-now-playing[hidden] { display: none; }',
       '.pp-now-playing .pp-switch { font-size: .85em; }',
       'body.pp-has-global { padding-bottom: 64px; }',
-      // Single view: progress row + subtitle overlay + transport row.
-      '.pp-global-bar { flex-direction: column; gap: .45em; position: relative; }',
-      '.pp-global-progress { display: flex; align-items: center; gap: .6em;',
-      '  min-width: 0; }',
-      '.pp-global-transport { display: flex; align-items: center; gap: .35em;',
-      '  width: 100%; }',
+      // Single condensed line, responsive: wraps on narrow viewports.
+      '.pp-global-bar { flex-wrap: wrap; row-gap: .45em; position: relative; }',
+      '.pp-global-nav { display: inline-flex; align-items: center; gap: .35em; }',
       '.pp-global-transport-right { margin-left: auto; display: inline-flex;',
       '  align-items: center; gap: .35em; }',
       '.pp-global-speed { min-width: 3em; }',
@@ -2693,14 +2690,11 @@
 
     var bar = document.createElement('div');
     bar.className = 'pp-global-bar';
-    var progressRow = document.createElement('div');
-    progressRow.className = 'pp-global-progress';
-    bar.appendChild(progressRow);
     var cover = document.createElement('img');
     cover.className = 'pp-global-cover';
     cover.alt = '';
     cover.addEventListener('error', function () { cover.style.display = 'none'; });
-    progressRow.appendChild(cover);
+    bar.appendChild(cover);
     var meta = document.createElement('div');
     meta.className = 'pp-global-meta';
     var title = document.createElement('span');
@@ -2709,37 +2703,40 @@
     var now = document.createElement('span');
     now.className = 'pp-global-now';
     meta.appendChild(now);
-    progressRow.appendChild(meta);
+    bar.appendChild(meta);
     var scrub = document.createElement('input');
     scrub.type = 'range';
     scrub.className = 'pp-global-scrubber';
     scrub.min = 0; scrub.max = 0; scrub.step = 1; scrub.value = 0;
     scrub.setAttribute('aria-label', settings.labels.position);
-    progressRow.appendChild(scrub);
+    bar.appendChild(scrub);
     var time = document.createElement('span');
     time.className = 'pp-global-time';
     time.setAttribute('aria-live', 'off');
-    progressRow.appendChild(time);
+    bar.appendChild(time);
+    var nav = document.createElement('span');
+    nav.className = 'pp-group pp-global-nav';
+    bar.appendChild(nav);
     var navPrev = document.createElement('button');
     navPrev.type = 'button';
     navPrev.className = 'podcast-player-btn pp-btn pp-global-prev';
     navPrev.setAttribute('aria-label', settings.labels.prevEp);
     navPrev.appendChild(icon('chapPrev'));
     navPrev.disabled = true;
-    progressRow.appendChild(navPrev);
+    nav.appendChild(navPrev);
     var play = document.createElement('button');
     play.type = 'button';
     play.className = 'podcast-player-btn pp-btn pp-global-play';
     play.setAttribute('aria-label', settings.labels.play);
     play.appendChild(icon('play'));
-    progressRow.appendChild(play);
+    nav.appendChild(play);
     var navNext = document.createElement('button');
     navNext.type = 'button';
     navNext.className = 'podcast-player-btn pp-btn pp-global-next';
     navNext.setAttribute('aria-label', settings.labels.nextEp);
     navNext.appendChild(icon('chapNext'));
     navNext.disabled = true;
-    progressRow.appendChild(navNext);
+    nav.appendChild(navNext);
 
     // Subtitle overlay: above the bar, absolutely positioned — any number
     // of lines never shifts the player UI.
@@ -2749,10 +2746,8 @@
     bar.insertBefore(gCaption, bar.firstChild);
     gAudio._captionEl = gCaption;
 
-    // Single-view transport row: everything lives in the bar.
-    var transport = document.createElement('div');
-    transport.className = 'pp-global-transport';
-    bar.appendChild(transport);
+    // One-line layout: cover · meta · scrubber · time · nav cluster ·
+    // settings cluster — wraps responsively on narrow viewports.
     var backSec = settings.backForward || settings.seekSeconds || 10;
     var back = document.createElement('button');
     back.type = 'button';
@@ -2762,7 +2757,7 @@
     back.addEventListener('click', function () {
       gAudio.currentTime = Math.max(0, gAudio.currentTime - backSec);
     });
-    transport.appendChild(back);
+    nav.appendChild(back);
     var forward = document.createElement('button');
     forward.type = 'button';
     forward.className = 'podcast-player-btn pp-btn pp-global-forward';
@@ -2771,10 +2766,10 @@
     forward.addEventListener('click', function () {
       gAudio.currentTime = Math.min(gAudio.duration || Infinity, gAudio.currentTime + backSec);
     });
-    transport.appendChild(forward);
+    nav.appendChild(forward);
     var right = document.createElement('span');
     right.className = 'pp-global-transport-right';
-    transport.appendChild(right);
+    bar.appendChild(right);
     var speedBtn = document.createElement('button');
     speedBtn.type = 'button';
     speedBtn.className = 'podcast-player-btn pp-btn pp-global-speed';
@@ -2927,6 +2922,15 @@
     gWrap.hidden = true;
     ensureLiveRegion(gWrap);
     document.body.appendChild(gWrap);
+    adaptToSidebar();
+    var sbTimer = null;
+    window.addEventListener('resize', function () {
+      if (sbTimer) return;
+      sbTimer = setTimeout(function () {
+        sbTimer = null;
+        adaptToSidebar();
+      }, 150);
+    });
 
     // Floating "reopen player" button: the persistent bar can be closed
     // (close keeps the audio playing) and brought back at any time.
@@ -2950,6 +2954,18 @@
     document.body.appendChild(reopen);
     gReopenBtn = reopen;
     loadFeed();
+  }
+
+  // The bottom player must never encroach on the docsify sidebar: it
+  // starts at the sidebar's right edge (recomputed on resize).
+  function adaptToSidebar() {
+    if (!gWrap) return;
+    var off = 0;
+    try {
+      var sb = document.querySelector('.sidebar');
+      if (sb && sb.offsetWidth) off = sb.offsetWidth;
+    } catch (_) { /* ignore */ }
+    gWrap.style.left = off ? off + 'px' : '';
   }
 
   // Show the persistent bar (also from the floating reopen button); the
